@@ -28,6 +28,7 @@ class ChatApp {
         this.playbackSpeed = 1.0;
         this.minBufferChunks = 8; // Nombre de chunks à accumuler avant de commencer (augmenté pour meilleure qualité)
         this.isBuffering = false;
+        this.currentAudioSource = null; // Track current playing audio source for interruption
 
         // Initialize
         this.init();
@@ -155,6 +156,11 @@ class ChatApp {
                 break;
 
             case 'status':
+                // If user starts speaking while audio is playing, stop it
+                if (message.status === 'User speaking...' && this.isPlayingAudio) {
+                    console.log('[Interruption] ⚠️ Utilisateur parle - Arrêt audio (via status)');
+                    this.stopAudioPlayback();
+                }
                 this.updateStatus(message.status, message.status.includes('Ready') ? 'ready' : 'listening');
                 break;
 
@@ -195,6 +201,13 @@ class ChatApp {
     }
 
     handleTranscript(role, transcript) {
+        // Check for special system commands
+        if (role === 'system' && transcript === '__CANCEL_AUDIO__') {
+            console.log('[Interruption] ⚠️ COMMANDE D\'ANNULATION REÇUE');
+            this.stopAudioPlayback();
+            return;
+        }
+        
         if (role === 'user') {
             // User transcript arrives complete from the server
             // Note: It may arrive AFTER the assistant response has started
@@ -250,6 +263,41 @@ class ChatApp {
                 break;
             }
         }
+    }
+
+    stopAudioPlayback() {
+        console.log('[Interruption] ━━━ DÉBUT ARRÊT AUDIO ━━━');
+        console.log('[Interruption] État avant: isPlaying =', this.isPlayingAudio, ', queue =', this.audioQueue.length, ', source =', !!this.currentAudioSource);
+        
+        // CRITICAL: Set this FIRST to prevent onended from continuing
+        this.isPlayingAudio = false;
+        this.isBuffering = false;
+        
+        // Stop currently playing audio source
+        if (this.currentAudioSource) {
+            try {
+                console.log('[Interruption] Arrêt de la source audio...');
+                this.currentAudioSource.stop();
+                this.currentAudioSource.disconnect();
+                console.log('[Interruption] ✅ Source audio arrêtée');
+            } catch (e) {
+                // Source may already be stopped
+                console.log('[Interruption] ⚠️ Source déjà arrêtée:', e.message);
+            }
+            this.currentAudioSource = null;
+        } else {
+            console.log('[Interruption] Pas de source audio active');
+        }
+        
+        // Clear the audio queue
+        const queueSize = this.audioQueue.length;
+        this.audioQueue = [];
+        console.log(`[Interruption] ✅ ${queueSize} chunks supprimés de la queue`);
+        
+        // Finalize any streaming assistant message
+        this.finalizeCurrentAssistantMessage();
+        
+        console.log('[Interruption] ━━━ FIN ARRÊT AUDIO ━━━');
     }
 
     async playAudioQueue() {
@@ -320,6 +368,9 @@ class ChatApp {
             const source = this.playbackContext.createBufferSource();
             source.buffer = audioBuffer;
             
+            // Store reference for potential interruption
+            this.currentAudioSource = source;
+            
             // If SoundTouch isn't available, use playbackRate as fallback
             if (this.playbackSpeed !== 1.0 && typeof SoundTouch === 'undefined') {
                 source.playbackRate.value = this.playbackSpeed;
@@ -329,8 +380,16 @@ class ChatApp {
             source.connect(this.playbackContext.destination);
             
             source.onended = () => {
-                console.log('[PlayQueue] Chunk terminé, passage au suivant');
-                this.playAudioQueue(); // Play next in queue
+                console.log('[PlayQueue] Chunk terminé');
+                this.currentAudioSource = null; // Clear reference
+                
+                // CRITICAL CHECK: Only continue if not interrupted
+                if (this.isPlayingAudio) {
+                    console.log('[PlayQueue] ➡️ Passage au chunk suivant');
+                    this.playAudioQueue(); // Play next in queue
+                } else {
+                    console.log('[PlayQueue] ⛔ INTERROMPU - Arrêt de la queue');
+                }
             };
 
             console.log('[PlayQueue] Démarrage lecture...');

@@ -17,6 +17,7 @@ public class OpenAIRealtimeService : IDisposable
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private CancellationTokenSource? _receiveCts;
     private string _systemInstructions = string.Empty;
+    private bool _isResponseActive = false; // Track if assistant is currently responding
 
     public event Func<string, Task>? OnAudioReceived;
     public event Func<string, string, Task>? OnTranscriptReceived; // role, transcript
@@ -117,9 +118,28 @@ public class OpenAIRealtimeService : IDisposable
                 try
                 {
                     // Convert JsonElement to object for serialization
-                    object parameters = t.Parameters.ValueKind != System.Text.Json.JsonValueKind.Undefined
-                        ? System.Text.Json.JsonSerializer.Deserialize<object>(t.Parameters.GetRawText()) ?? new { }
-                        : new { };
+                    object parameters;
+                    
+                    if (t.Parameters.ValueKind == System.Text.Json.JsonValueKind.Undefined || 
+                        t.Parameters.ValueKind == System.Text.Json.JsonValueKind.Null)
+                    {
+                        // Default empty parameters schema
+                        parameters = new 
+                        { 
+                            type = "object",
+                            properties = new { },
+                            required = new string[] { }
+                        };
+                        _logger.LogWarning("Tool {ToolName} has no parameters defined, using empty schema", t.Name);
+                    }
+                    else
+                    {
+                        var rawJson = t.Parameters.GetRawText();
+                        parameters = System.Text.Json.JsonSerializer.Deserialize<object>(rawJson) ?? new { };
+                        _logger.LogInformation("Added tool {ToolName} with parameters: {Parameters}", 
+                            t.Name, 
+                            rawJson.Length > 100 ? rawJson.Substring(0, 100) + "..." : rawJson);
+                    }
                     
                     tools.Add(new Tool
                     {
@@ -128,10 +148,6 @@ public class OpenAIRealtimeService : IDisposable
                         Description = t.Description,
                         Parameters = parameters
                     });
-                    
-                    _logger.LogInformation("Added tool {ToolName} with parameters: {Parameters}", 
-                        t.Name, 
-                        t.Parameters.GetRawText());
                 }
                 catch (Exception ex)
                 {
@@ -322,6 +338,31 @@ public class OpenAIRealtimeService : IDisposable
 
                 case "input_audio_buffer.speech_started":
                     await NotifyStatus("User speaking...");
+                    
+                    // Cancel any ongoing response (barge-in / interruption)
+                    if (_isResponseActive)
+                    {
+                        _logger.LogInformation("User interrupted - cancelling active response");
+                        try
+                        {
+                            var cancelEvent = new ResponseCancelEvent();
+                            await SendToOpenAIAsync(cancelEvent, CancellationToken.None);
+                            _logger.LogInformation("Response cancelled successfully");
+                            
+                            // Notify client to stop audio playback and clear queue
+                            await NotifyTranscript("system", "__CANCEL_AUDIO__");
+                            
+                            _isResponseActive = false;
+                        }
+                        catch (Exception ex)
+                        {
+                            _logger.LogWarning(ex, "Error cancelling response");
+                        }
+                    }
+                    else
+                    {
+                        _logger.LogDebug("User started speaking (no active response to cancel)");
+                    }
                     break;
 
                 case "input_audio_buffer.speech_stopped":
@@ -374,6 +415,12 @@ public class OpenAIRealtimeService : IDisposable
                     }
                     break;
 
+                case "response.created":
+                    // Mark response as active as soon as it's created (before audio arrives)
+                    _isResponseActive = true;
+                    _logger.LogInformation("Response created - now interruptible");
+                    break;
+
                 case "response.audio.delta":
                     if (root.TryGetProperty("delta", out var audioDelta))
                     {
@@ -404,6 +451,8 @@ public class OpenAIRealtimeService : IDisposable
                     break;
 
                 case "response.done":
+                    _isResponseActive = false;
+                    _logger.LogDebug("Response completed");
                     await NotifyStatus("Ready");
                     await NotifyResponseComplete();
                     break;
@@ -412,8 +461,16 @@ public class OpenAIRealtimeService : IDisposable
                     if (root.TryGetProperty("error", out var error))
                     {
                         var errorMessage = error.GetProperty("message").GetString() ?? "Unknown error";
-                        _logger.LogError("OpenAI error: {Error}", errorMessage);
-                        await NotifyError(errorMessage);
+                        // Don't log "no active response" errors as they're expected during interruption
+                        if (!errorMessage.Contains("no active response"))
+                        {
+                            _logger.LogError("OpenAI error: {Error}", errorMessage);
+                            await NotifyError(errorMessage);
+                        }
+                        else
+                        {
+                            _logger.LogDebug("Cancellation timing issue (response already completed): {Error}", errorMessage);
+                        }
                     }
                     break;
 
