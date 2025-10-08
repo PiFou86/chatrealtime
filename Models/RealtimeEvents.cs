@@ -52,6 +52,27 @@ public class SessionConfig
 
     [JsonPropertyName("max_response_output_tokens")]
     public int? MaxResponseOutputTokens { get; set; }
+
+    [JsonPropertyName("tools")]
+    public List<Tool>? Tools { get; set; }
+
+    [JsonPropertyName("tool_choice")]
+    public string? ToolChoice { get; set; } = "auto";
+}
+
+public class Tool
+{
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "function";
+
+    [JsonPropertyName("name")]
+    public string Name { get; set; } = string.Empty;
+
+    [JsonPropertyName("description")]
+    public string Description { get; set; } = string.Empty;
+
+    [JsonPropertyName("parameters")]
+    public object Parameters { get; set; } = new();
 }
 
 public class TranscriptionConfig
@@ -130,6 +151,30 @@ public class ResponseCancelEvent : RealtimeEvent
     {
         Type = "response.cancel";
     }
+}
+
+// Conversation item events
+public class ConversationItemCreateEvent : RealtimeEvent
+{
+    public ConversationItemCreateEvent()
+    {
+        Type = "conversation.item.create";
+    }
+
+    [JsonPropertyName("item")]
+    public FunctionCallOutputItem Item { get; set; } = new();
+}
+
+public class FunctionCallOutputItem
+{
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "function_call_output";
+
+    [JsonPropertyName("call_id")]
+    public string? CallId { get; set; }
+
+    [JsonPropertyName("output")]
+    public string? Output { get; set; }
 }
 
 // Server events (received from OpenAI)

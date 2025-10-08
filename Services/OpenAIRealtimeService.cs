@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using chatrealtime.Configuration;
 using chatrealtime.Models;
+using chatrealtime.Services.Tools;
 using Microsoft.Extensions.Options;
 
 namespace chatrealtime.Services;
@@ -11,6 +12,7 @@ public class OpenAIRealtimeService : IDisposable
 {
     private readonly OpenAISettings _settings;
     private readonly ILogger<OpenAIRealtimeService> _logger;
+    private readonly IToolExecutor _toolExecutor;
     private ClientWebSocket? _openAIWebSocket;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private CancellationTokenSource? _receiveCts;
@@ -23,10 +25,12 @@ public class OpenAIRealtimeService : IDisposable
 
     public OpenAIRealtimeService(
         IOptions<OpenAISettings> settings,
-        ILogger<OpenAIRealtimeService> logger)
+        ILogger<OpenAIRealtimeService> logger,
+        IToolExecutor toolExecutor)
     {
         _settings = settings.Value;
         _logger = logger;
+        _toolExecutor = toolExecutor;
         LoadSystemInstructions();
     }
 
@@ -103,6 +107,43 @@ public class OpenAIRealtimeService : IDisposable
 
     private async Task ConfigureSessionAsync(CancellationToken cancellationToken)
     {
+        // Convert configured tools to API format
+        List<Tool>? tools = null;
+        if (_settings.Tools != null && _settings.Tools.Any())
+        {
+            tools = new List<Tool>();
+            foreach (var t in _settings.Tools)
+            {
+                try
+                {
+                    // Convert JsonElement to object for serialization
+                    object parameters = t.Parameters.ValueKind != System.Text.Json.JsonValueKind.Undefined
+                        ? System.Text.Json.JsonSerializer.Deserialize<object>(t.Parameters.GetRawText()) ?? new { }
+                        : new { };
+                    
+                    tools.Add(new Tool
+                    {
+                        Type = "function",
+                        Name = t.Name,
+                        Description = t.Description,
+                        Parameters = parameters
+                    });
+                    
+                    _logger.LogInformation("Added tool {ToolName} with parameters: {Parameters}", 
+                        t.Name, 
+                        t.Parameters.GetRawText());
+                }
+                catch (Exception ex)
+                {
+                    _logger.LogError(ex, "Error configuring tool {ToolName}", t.Name);
+                }
+            }
+            
+            _logger.LogInformation("Configured {Count} MCP tools: {Tools}", 
+                tools.Count, 
+                string.Join(", ", tools.Select(t => t.Name)));
+        }
+
         var sessionUpdate = new SessionUpdateEvent
         {
             Session = new SessionConfig
@@ -126,7 +167,9 @@ public class OpenAIRealtimeService : IDisposable
                     SilenceDurationMs = _settings.TurnDetection.SilenceDurationMs
                 },
                 Temperature = _settings.Temperature,
-                MaxResponseOutputTokens = _settings.MaxResponseOutputTokens
+                MaxResponseOutputTokens = _settings.MaxResponseOutputTokens,
+                Tools = tools,
+                ToolChoice = tools?.Any() == true ? "auto" : null
             }
         };
 
@@ -356,6 +399,10 @@ public class OpenAIRealtimeService : IDisposable
                 case "response.audio_transcript.done":
                     break;
 
+                case "response.function_call_arguments.done":
+                    await HandleFunctionCallAsync(root);
+                    break;
+
                 case "response.done":
                     await NotifyStatus("Ready");
                     await NotifyResponseComplete();
@@ -418,6 +465,88 @@ public class OpenAIRealtimeService : IDisposable
         if (OnTranscriptReceived != null)
         {
             await OnTranscriptReceived("system", "__RESPONSE_DONE__");
+        }
+    }
+
+    private async Task HandleFunctionCallAsync(JsonElement root)
+    {
+        try
+        {
+            // Extract function call details
+            var callId = root.TryGetProperty("call_id", out var cid) ? cid.GetString() : null;
+            var name = root.TryGetProperty("name", out var n) ? n.GetString() : null;
+            var argumentsString = root.TryGetProperty("arguments", out var args) ? args.GetString() : "{}";
+
+            if (string.IsNullOrEmpty(callId) || string.IsNullOrEmpty(name))
+            {
+                _logger.LogWarning("Invalid function call event: missing call_id or name");
+                return;
+            }
+
+            _logger.LogInformation("Function call requested: {FunctionName} with call_id: {CallId}", name, callId);
+            await NotifyStatus($"Executing tool: {name}...");
+
+            try
+            {
+                // Parse arguments
+                var argumentsJson = JsonDocument.Parse(argumentsString).RootElement;
+
+                // Execute the tool
+                var result = await _toolExecutor.ExecuteAsync(name, argumentsJson);
+
+                // Serialize result
+                var resultJson = JsonSerializer.Serialize(result);
+                _logger.LogInformation("Tool {FunctionName} executed successfully. Result: {Result}", 
+                    name, resultJson.Length > 200 ? resultJson.Substring(0, 200) + "..." : resultJson);
+
+                // Send function call output back to OpenAI
+                var outputEvent = new ConversationItemCreateEvent
+                {
+                    Item = new FunctionCallOutputItem
+                    {
+                        Type = "function_call_output",
+                        CallId = callId,
+                        Output = resultJson
+                    }
+                };
+
+                await SendToOpenAIAsync(outputEvent, CancellationToken.None);
+
+                // Trigger a new response to continue the conversation
+                var responseEvent = new ResponseCreateEvent();
+                await SendToOpenAIAsync(responseEvent, CancellationToken.None);
+
+                _logger.LogInformation("Function call result sent to OpenAI, response triggered");
+            }
+            catch (Exception ex)
+            {
+                _logger.LogError(ex, "Error executing tool: {FunctionName}", name);
+                
+                // Send error back to OpenAI
+                var errorOutput = new
+                {
+                    error = true,
+                    message = ex.Message,
+                    type = ex.GetType().Name
+                };
+
+                var outputEvent = new ConversationItemCreateEvent
+                {
+                    Item = new FunctionCallOutputItem
+                    {
+                        Type = "function_call_output",
+                        CallId = callId,
+                        Output = JsonSerializer.Serialize(errorOutput)
+                    }
+                };
+
+                await SendToOpenAIAsync(outputEvent, CancellationToken.None);
+                await SendToOpenAIAsync(new ResponseCreateEvent(), CancellationToken.None);
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error handling function call");
         }
     }
 
