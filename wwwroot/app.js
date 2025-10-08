@@ -8,6 +8,8 @@ class ChatApp {
         this.messagesContainer = document.getElementById('messages');
         this.messageCountElement = document.getElementById('message-count');
         this.durationElement = document.getElementById('duration');
+        this.playbackSpeedSlider = document.getElementById('playback-speed');
+        this.speedValueDisplay = document.getElementById('speed-value');
 
         // State
         this.isListening = false;
@@ -23,6 +25,7 @@ class ChatApp {
         this.audioQueue = [];
         this.isPlayingAudio = false;
         this.currentResponseId = null;
+        this.playbackSpeed = 1.0;
 
         // Initialize
         this.init();
@@ -75,6 +78,11 @@ class ChatApp {
 
         this.toggleButton.addEventListener('click', () => {
             this.toggleListening();
+        });
+
+        this.playbackSpeedSlider.addEventListener('input', (e) => {
+            this.playbackSpeed = parseFloat(e.target.value);
+            this.speedValueDisplay.textContent = this.playbackSpeed.toFixed(1) + 'x';
         });
     }
 
@@ -259,6 +267,7 @@ class ChatApp {
             // Play the audio
             const source = this.playbackContext.createBufferSource();
             source.buffer = audioBuffer;
+            source.playbackRate.value = this.playbackSpeed; // Apply speed control
             source.connect(this.playbackContext.destination);
             
             source.onended = () => {
