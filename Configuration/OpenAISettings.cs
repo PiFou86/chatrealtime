@@ -6,6 +6,8 @@ public class OpenAISettings
     public string Model { get; set; } = "gpt-realtime-mini-2025-10-06";
     public string RealtimeUrl { get; set; } = "wss://api.openai.com/v1/realtime";
     public string Voice { get; set; } = "alloy";
+    public string TranscriptionModel { get; set; } = "gpt-4o-transcribe";
+    public string SystemPromptFile { get; set; } = "Prompts/Marvin.md";
     public double Temperature { get; set; } = 0.8;
     public int MaxResponseOutputTokens { get; set; } = 4096;
     public string Instructions { get; set; } = string.Empty;

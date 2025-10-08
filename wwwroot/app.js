@@ -129,8 +129,6 @@ class ChatApp {
     }
 
     async handleServerMessage(message) {
-        console.log('[Client] Message du serveur:', message.type, message);
-
         switch (message.type) {
             case 'ready':
                 this.updateStatus('Connecté - Prêt à écouter', 'ready');
@@ -144,14 +142,9 @@ class ChatApp {
             case 'audio':
                 // Queue audio for playback
                 if (message.audio) {
-                    console.log('[Client] Audio reçu, taille:', message.audio.length);
                     this.audioQueue.push(message.audio);
-                    console.log('[Client] isPlayingAudio:', this.isPlayingAudio, 'Queue length:', this.audioQueue.length);
                     if (!this.isPlayingAudio) {
-                        console.log('[Client] Démarrage lecture audio');
                         this.playAudioQueue();
-                    } else {
-                        console.log('[Client] Audio ajouté à la queue (lecture déjà en cours)');
                     }
                 }
                 break;
@@ -171,17 +164,11 @@ class ChatApp {
     }
 
     handleTranscript(role, transcript) {
-        console.log('[Client] Transcript reçu - Role:', role, 'Texte:', transcript);
-        
         if (role === 'user') {
             // User transcript arrives complete from the server
             // Note: It may arrive AFTER the assistant response has started
-            console.log('[Client] Traitement transcript utilisateur:', transcript);
             if (transcript && transcript.trim()) {
-                console.log('[Client] Ajout message utilisateur à l\'interface');
                 this.addUserMessageBeforeLastAssistant(transcript);
-            } else {
-                console.warn('[Client] Transcript utilisateur vide ou invalide');
             }
         } else if (role === 'assistant') {
             // Assistant transcript arrives as deltas
@@ -227,7 +214,6 @@ class ChatApp {
         for (let i = messages.length - 1; i >= 0; i--) {
             if (messages[i].dataset.streaming === 'true') {
                 messages[i].dataset.streaming = 'false';
-                console.log('Message assistant finalisé');
                 break;
             }
         }
@@ -236,13 +222,11 @@ class ChatApp {
     async playAudioQueue() {
         if (this.audioQueue.length === 0) {
             this.isPlayingAudio = false;
-            console.log('[Client] Queue audio vide');
             return;
         }
 
         this.isPlayingAudio = true;
         const base64Audio = this.audioQueue.shift();
-        console.log('[Client] Lecture audio, reste dans la queue:', this.audioQueue.length);
 
         try {
             // Decode base64 to raw PCM16 data
@@ -470,7 +454,6 @@ class ChatApp {
             // Insert before the last assistant message
             const lastAssistant = assistantMessages[assistantMessages.length - 1];
             this.messagesContainer.insertBefore(message, lastAssistant);
-            console.log('[Client] Message utilisateur inséré avant la réponse de l\'assistant');
         } else {
             // No assistant message yet, just append
             this.messagesContainer.appendChild(message);

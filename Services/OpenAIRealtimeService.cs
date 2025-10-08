@@ -14,6 +14,7 @@ public class OpenAIRealtimeService : IDisposable
     private ClientWebSocket? _openAIWebSocket;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private CancellationTokenSource? _receiveCts;
+    private string _systemInstructions = string.Empty;
 
     public event Func<string, Task>? OnAudioReceived;
     public event Func<string, string, Task>? OnTranscriptReceived; // role, transcript
@@ -26,6 +27,38 @@ public class OpenAIRealtimeService : IDisposable
     {
         _settings = settings.Value;
         _logger = logger;
+        LoadSystemInstructions();
+    }
+
+    private void LoadSystemInstructions()
+    {
+        try
+        {
+            // Use the configured Instructions if SystemPromptFile is not set
+            if (string.IsNullOrEmpty(_settings.SystemPromptFile))
+            {
+                _systemInstructions = _settings.Instructions;
+                _logger.LogInformation("Using inline instructions from configuration");
+                return;
+            }
+
+            // Try to load the system prompt from file
+            if (File.Exists(_settings.SystemPromptFile))
+            {
+                _systemInstructions = File.ReadAllText(_settings.SystemPromptFile);
+                _logger.LogInformation("Loaded system instructions from: {File}", _settings.SystemPromptFile);
+            }
+            else
+            {
+                _logger.LogWarning("System prompt file not found: {File}. Using inline instructions.", _settings.SystemPromptFile);
+                _systemInstructions = _settings.Instructions;
+            }
+        }
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error loading system prompt file. Using inline instructions.");
+            _systemInstructions = _settings.Instructions;
+        }
     }
 
     public async Task<bool> ConnectAsync(CancellationToken cancellationToken = default)
@@ -75,15 +108,15 @@ public class OpenAIRealtimeService : IDisposable
             Session = new SessionConfig
             {
                 Modalities = new[] { "text", "audio" },
-                Instructions = _settings.Instructions,
+                Instructions = _systemInstructions,
                 Voice = _settings.Voice,
                 InputAudioFormat = "pcm16",
                 OutputAudioFormat = "pcm16",
-                // Use gpt-4o-transcribe instead of whisper-1 for realtime transcription
+                // Use the configured transcription model (default: gpt-4o-transcribe)
                 // Reference: https://community.openai.com/t/cant-get-the-user-transcription-in-realtime-api/1076308/5
                 InputAudioTranscription = new TranscriptionConfig
                 {
-                    Model = "gpt-4o-transcribe"
+                    Model = _settings.TranscriptionModel
                 },
                 TurnDetection = new TurnDetectionConfig
                 {
@@ -236,44 +269,30 @@ public class OpenAIRealtimeService : IDisposable
             }
 
             var eventType = typeElement.GetString();
-            _logger.LogInformation("[OpenAI Event] {EventType}", eventType);
-            
-            // Log full message for debugging transcription issues
-            if (eventType?.Contains("transcript") == true || eventType?.Contains("item.created") == true)
-            {
-                _logger.LogInformation("[OpenAI Event Full] {Message}", message);
-            }
 
             switch (eventType)
             {
                 case "session.created":
                 case "session.updated":
-                    _logger.LogInformation("Session event: {Type}", eventType);
                     await NotifyStatus("Session ready");
                     break;
 
                 case "input_audio_buffer.speech_started":
-                    _logger.LogInformation("User started speaking");
                     await NotifyStatus("User speaking...");
                     break;
 
                 case "input_audio_buffer.speech_stopped":
-                    _logger.LogInformation("User stopped speaking");
                     await NotifyStatus("Processing...");
                     break;
 
                 case "input_audio_buffer.committed":
-                    _logger.LogInformation("Audio committed");
                     break;
 
                 case "conversation.item.created":
                     // Check if this item contains a transcript (for user input)
                     if (root.TryGetProperty("item", out var item))
                     {
-                        var itemType = item.TryGetProperty("type", out var typeVal) ? typeVal.GetString() : null;
                         var itemRole = item.TryGetProperty("role", out var roleVal) ? roleVal.GetString() : null;
-                        
-                        _logger.LogInformation("[Item Created] Type: {Type}, Role: {Role}", itemType, itemRole);
                         
                         // For user messages, check if there's a transcript
                         if (itemRole == "user" && item.TryGetProperty("content", out var content))
@@ -285,7 +304,6 @@ public class OpenAIRealtimeService : IDisposable
                                     var transcriptText = transcript.GetString();
                                     if (!string.IsNullOrEmpty(transcriptText))
                                     {
-                                        _logger.LogInformation("[User Transcript] {Transcript}", transcriptText);
                                         await NotifyTranscript("user", transcriptText);
                                     }
                                 }
@@ -295,35 +313,21 @@ public class OpenAIRealtimeService : IDisposable
                     break;
 
                 case "conversation.item.input_audio_transcription.completed":
-                    _logger.LogInformation("[Transcription Event] Processing input_audio_transcription.completed");
                     if (root.TryGetProperty("transcript", out var userTranscript))
                     {
                         var transcriptText = userTranscript.GetString();
-                        _logger.LogInformation("[User Transcript Raw] '{Transcript}' (Empty: {IsEmpty})", 
-                            transcriptText ?? "null", 
-                            string.IsNullOrEmpty(transcriptText));
-                        
                         if (!string.IsNullOrEmpty(transcriptText))
                         {
-                            _logger.LogInformation("[User Transcript Complete] Sending to client: {Transcript}", transcriptText);
                             await NotifyTranscript("user", transcriptText);
                         }
-                        else
-                        {
-                            _logger.LogWarning("[User Transcript] Transcript is empty or null");
-                        }
-                    }
-                    else
-                    {
-                        _logger.LogWarning("[User Transcript] No 'transcript' property found in event");
                     }
                     break;
 
                 case "conversation.item.input_audio_transcription.failed":
-                    _logger.LogError("[Transcription Failed] User audio transcription failed");
                     if (root.TryGetProperty("error", out var transcriptError))
                     {
-                        _logger.LogError("[Transcription Error] {Error}", transcriptError);
+                        var errorMessage = transcriptError.TryGetProperty("message", out var msg) ? msg.GetString() : "Unknown error";
+                        _logger.LogError("User audio transcription failed: {Error}", errorMessage);
                     }
                     break;
 
@@ -331,22 +335,10 @@ public class OpenAIRealtimeService : IDisposable
                     if (root.TryGetProperty("delta", out var audioDelta))
                     {
                         var audioData = audioDelta.GetString();
-                        _logger.LogInformation("[Audio Delta] Audio data present: {Present}, Length: {Length}", 
-                            audioData != null, 
-                            audioData?.Length ?? 0);
                         if (!string.IsNullOrEmpty(audioData))
                         {
-                            _logger.LogInformation("[Audio Delta] Sending audio to client, size: {Size} bytes", audioData.Length);
                             await NotifyAudio(audioData);
                         }
-                        else
-                        {
-                            _logger.LogWarning("[Audio Delta] Audio data is null or empty");
-                        }
-                    }
-                    else
-                    {
-                        _logger.LogWarning("[Audio Delta] No 'delta' property found in audio event");
                     }
                     break;
 
@@ -356,23 +348,16 @@ public class OpenAIRealtimeService : IDisposable
                         var delta = transcriptDelta.GetString();
                         if (!string.IsNullOrEmpty(delta))
                         {
-                            _logger.LogDebug("[Assistant Transcript Delta] {Delta}", delta);
                             await NotifyTranscript("assistant", delta);
                         }
                     }
                     break;
 
                 case "response.audio_transcript.done":
-                    if (root.TryGetProperty("transcript", out var fullTranscript))
-                    {
-                        _logger.LogInformation("Full transcript: {Transcript}", fullTranscript.GetString());
-                    }
                     break;
 
                 case "response.done":
-                    _logger.LogInformation("Response completed");
                     await NotifyStatus("Ready");
-                    // Notify client that response is complete
                     await NotifyResponseComplete();
                     break;
 
@@ -386,9 +371,7 @@ public class OpenAIRealtimeService : IDisposable
                     break;
 
                 default:
-                    _logger.LogWarning("[OpenAI Event] Unhandled event type: {Type} - Full message: {Message}", 
-                        eventType, 
-                        message.Length > 500 ? message.Substring(0, 500) + "..." : message);
+                    // Silently ignore unhandled events
                     break;
             }
         }
