@@ -26,6 +26,8 @@ class ChatApp {
         this.isPlayingAudio = false;
         this.currentResponseId = null;
         this.playbackSpeed = 1.0;
+        this.minBufferChunks = 8; // Nombre de chunks à accumuler avant de commencer (augmenté pour meilleure qualité)
+        this.isBuffering = false;
 
         // Initialize
         this.init();
@@ -38,19 +40,11 @@ class ChatApp {
     }
 
     checkSoundTouchAvailability() {
-        console.log('=== Vérification SoundTouch ===');
-        console.log('window.SoundTouch:', typeof window.SoundTouch);
-        console.log('window.soundtouch:', typeof window.soundtouch);
-        
         if (typeof window.SoundTouch !== 'undefined') {
-            console.log('✅ SoundTouch est chargé et disponible');
-        } else if (typeof window.soundtouch !== 'undefined') {
-            console.log('✅ soundtouch (lowercase) est chargé');
+            console.log('✅ SoundTouch chargé - Time-stretching disponible');
         } else {
-            console.error('❌ SoundTouch n\'est PAS disponible - le fallback playbackRate sera utilisé');
-            console.log('Cela signifie que la vitesse changera aussi la hauteur de la voix (effet chipmunk)');
+            console.warn('⚠️ SoundTouch non disponible - Utilisation de playbackRate (change la hauteur)');
         }
-        console.log('==============================');
     }
 
     async loadMicrophones() {
@@ -168,7 +162,19 @@ class ChatApp {
                 // Queue audio for playback
                 if (message.audio) {
                     this.audioQueue.push(message.audio);
-                    if (!this.isPlayingAudio) {
+                    
+                    // Si on n'est pas en train de jouer et qu'on a assez de buffer, commencer
+                    if (!this.isPlayingAudio && !this.isBuffering) {
+                        if (this.audioQueue.length >= this.minBufferChunks) {
+                            console.log(`[Buffer] ${this.audioQueue.length} chunks accumulés, début de la lecture`);
+                            this.playAudioQueue();
+                        } else {
+                            this.isBuffering = true;
+                            console.log(`[Buffer] Accumulation... (${this.audioQueue.length}/${this.minBufferChunks})`);
+                        }
+                    } else if (this.isBuffering && this.audioQueue.length >= this.minBufferChunks) {
+                        console.log(`[Buffer] Buffer plein (${this.audioQueue.length} chunks), démarrage lecture`);
+                        this.isBuffering = false;
                         this.playAudioQueue();
                     }
                 }
@@ -201,6 +207,8 @@ class ChatApp {
         } else if (role === 'system' && transcript === '__RESPONSE_DONE__') {
             // Mark current response as complete
             this.finalizeCurrentAssistantMessage();
+            // Reset buffering for next response
+            this.isBuffering = false;
         }
     }
 
@@ -245,13 +253,17 @@ class ChatApp {
     }
 
     async playAudioQueue() {
+        console.log(`[PlayQueue] Appelé - Queue: ${this.audioQueue.length}, isPlaying: ${this.isPlayingAudio}`);
+        
         if (this.audioQueue.length === 0) {
             this.isPlayingAudio = false;
+            console.log('[PlayQueue] Queue vide, arrêt');
             return;
         }
 
         this.isPlayingAudio = true;
         const base64Audio = this.audioQueue.shift();
+        console.log(`[PlayQueue] Traitement chunk - Reste: ${this.audioQueue.length}`);
 
         try {
             // Decode base64 to raw PCM16 data
@@ -266,27 +278,31 @@ class ChatApp {
 
             // Create audio context for playback if not exists
             if (!this.playbackContext) {
+                console.log('[PlayQueue] Création AudioContext');
                 this.playbackContext = new (window.AudioContext || window.webkitAudioContext)({
                     sampleRate: 24000
                 });
+                console.log('[PlayQueue] AudioContext state:', this.playbackContext.state);
+            }
+            
+            // Resume context if suspended (Safari requirement)
+            if (this.playbackContext.state === 'suspended') {
+                console.log('[PlayQueue] AudioContext suspendu, tentative de reprise...');
+                await this.playbackContext.resume();
+                console.log('[PlayQueue] AudioContext state après resume:', this.playbackContext.state);
             }
 
             let processedSamples;
 
             // Apply time-stretching if speed is not 1.0
-            if (this.playbackSpeed !== 1.0) {
-                console.log(`[Audio] Applying speed: ${this.playbackSpeed}x`);
-                
-                if (typeof SoundTouch !== 'undefined') {
-                    console.log('[Audio] SoundTouch disponible, utilisation du time-stretching');
-                    processedSamples = this.applyTimeStretching(pcm16, 24000, this.playbackSpeed);
-                } else {
-                    console.warn('[Audio] SoundTouch non disponible, utilisation de playbackRate classique');
-                    // Fallback to simple conversion and we'll use playbackRate
-                    processedSamples = new Float32Array(pcm16.length);
-                    for (let i = 0; i < pcm16.length; i++) {
-                        processedSamples[i] = pcm16[i] / 32768.0;
-                    }
+            if (this.playbackSpeed !== 1.0 && typeof SoundTouch !== 'undefined') {
+                processedSamples = this.applyTimeStretching(pcm16, 24000, this.playbackSpeed);
+            } else if (this.playbackSpeed !== 1.0) {
+                console.warn('[Audio] SoundTouch non disponible, utilisation de playbackRate classique');
+                // Fallback to simple conversion and we'll use playbackRate
+                processedSamples = new Float32Array(pcm16.length);
+                for (let i = 0; i < pcm16.length; i++) {
+                    processedSamples[i] = pcm16[i] / 32768.0;
                 }
             } else {
                 // No time-stretching needed, just convert to Float32
@@ -313,20 +329,22 @@ class ChatApp {
             source.connect(this.playbackContext.destination);
             
             source.onended = () => {
+                console.log('[PlayQueue] Chunk terminé, passage au suivant');
                 this.playAudioQueue(); // Play next in queue
             };
 
+            console.log('[PlayQueue] Démarrage lecture...');
             source.start();
+            console.log('[PlayQueue] ✅ Lecture démarrée');
         } catch (error) {
-            console.error('Erreur lors de la lecture audio:', error);
+            console.error('[PlayQueue] ❌ ERREUR:', error);
+            console.error('[PlayQueue] Stack:', error.stack);
             this.playAudioQueue(); // Continue with next audio
         }
     }
 
     applyTimeStretching(pcm16Samples, sampleRate, speed) {
         try {
-            console.log(`[TimeStretch] Début - Samples: ${pcm16Samples.length}, Speed: ${speed}x`);
-            
             // Convert Int16 to Float32 for SoundTouch (interleaved stereo format)
             const float32Input = new Float32Array(pcm16Samples.length * 2); // Stereo
             for (let i = 0; i < pcm16Samples.length; i++) {
@@ -335,28 +353,21 @@ class ChatApp {
                 float32Input[i * 2 + 1] = sample; // Right channel (same for mono)
             }
             
-            console.log('[TimeStretch] Création SoundTouch instance');
-            
             // Create SoundTouch instance
             const soundTouch = new window.SoundTouch();
             soundTouch.tempo = speed; // Change tempo (speed) without affecting pitch
             soundTouch.pitch = 1.0;   // Keep original pitch
             
-            console.log(`[TimeStretch] Config - Tempo: ${soundTouch.tempo}, Pitch: ${soundTouch.pitch}`);
-            
             // Feed all input samples to SoundTouch
             soundTouch.inputBuffer.putSamples(float32Input, 0, pcm16Samples.length);
             
             // Process the samples
-            console.log('[TimeStretch] Traitement des samples...');
             soundTouch.process();
             
             // Extract all processed samples
             const outputFrames = soundTouch.outputBuffer.frameCount;
-            console.log(`[TimeStretch] Frames en sortie: ${outputFrames}`);
             
             if (outputFrames === 0) {
-                console.warn('[TimeStretch] Aucune frame en sortie, fallback');
                 throw new Error('No output frames');
             }
             
@@ -369,12 +380,10 @@ class ChatApp {
                 monoOutput[i] = stereoOutput[i * 2]; // Take left channel
             }
             
-            console.log(`[TimeStretch] ✅ Succès - ${monoOutput.length} samples générés`);
             return monoOutput;
             
         } catch (error) {
-            console.error('[TimeStretch] ❌ Erreur:', error);
-            console.log('[TimeStretch] Fallback: conversion simple sans time-stretching');
+            console.error('[TimeStretch] Erreur:', error);
             
             // Fallback: simple conversion without time-stretching
             const result = new Float32Array(pcm16Samples.length);
