@@ -331,11 +331,22 @@ public class OpenAIRealtimeService : IDisposable
                     if (root.TryGetProperty("delta", out var audioDelta))
                     {
                         var audioData = audioDelta.GetString();
+                        _logger.LogInformation("[Audio Delta] Audio data present: {Present}, Length: {Length}", 
+                            audioData != null, 
+                            audioData?.Length ?? 0);
                         if (!string.IsNullOrEmpty(audioData))
                         {
-                            _logger.LogDebug("[Audio Delta] Size: {Size} bytes", audioData.Length);
+                            _logger.LogInformation("[Audio Delta] Sending audio to client, size: {Size} bytes", audioData.Length);
                             await NotifyAudio(audioData);
                         }
+                        else
+                        {
+                            _logger.LogWarning("[Audio Delta] Audio data is null or empty");
+                        }
+                    }
+                    else
+                    {
+                        _logger.LogWarning("[Audio Delta] No 'delta' property found in audio event");
                     }
                     break;
 

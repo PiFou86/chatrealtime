@@ -146,9 +146,12 @@ class ChatApp {
                 if (message.audio) {
                     console.log('[Client] Audio reçu, taille:', message.audio.length);
                     this.audioQueue.push(message.audio);
+                    console.log('[Client] isPlayingAudio:', this.isPlayingAudio, 'Queue length:', this.audioQueue.length);
                     if (!this.isPlayingAudio) {
                         console.log('[Client] Démarrage lecture audio');
                         this.playAudioQueue();
+                    } else {
+                        console.log('[Client] Audio ajouté à la queue (lecture déjà en cours)');
                     }
                 }
                 break;
