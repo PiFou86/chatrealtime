@@ -172,10 +172,11 @@ class ChatApp {
         
         if (role === 'user') {
             // User transcript arrives complete from the server
+            // Note: It may arrive AFTER the assistant response has started
             console.log('[Client] Traitement transcript utilisateur:', transcript);
             if (transcript && transcript.trim()) {
                 console.log('[Client] Ajout message utilisateur à l\'interface');
-                this.addUserMessage(transcript);
+                this.addUserMessageBeforeLastAssistant(transcript);
             } else {
                 console.warn('[Client] Transcript utilisateur vide ou invalide');
             }
@@ -452,6 +453,26 @@ class ChatApp {
     addUserMessage(text) {
         const message = this.createMessageElement('user', '👤', 'Vous', text);
         this.messagesContainer.appendChild(message);
+        this.scrollToBottom();
+        this.updateMessageCount();
+    }
+
+    addUserMessageBeforeLastAssistant(text) {
+        // Find the last assistant message
+        const assistantMessages = this.messagesContainer.querySelectorAll('.message.ai');
+        
+        const message = this.createMessageElement('user', '👤', 'Vous', text);
+        
+        if (assistantMessages.length > 0) {
+            // Insert before the last assistant message
+            const lastAssistant = assistantMessages[assistantMessages.length - 1];
+            this.messagesContainer.insertBefore(message, lastAssistant);
+            console.log('[Client] Message utilisateur inséré avant la réponse de l\'assistant');
+        } else {
+            // No assistant message yet, just append
+            this.messagesContainer.appendChild(message);
+        }
+        
         this.scrollToBottom();
         this.updateMessageCount();
     }
