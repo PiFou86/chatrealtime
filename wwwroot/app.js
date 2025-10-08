@@ -34,6 +34,23 @@ class ChatApp {
     async init() {
         await this.loadMicrophones();
         this.setupEventListeners();
+        this.checkSoundTouchAvailability();
+    }
+
+    checkSoundTouchAvailability() {
+        console.log('=== Vérification SoundTouch ===');
+        console.log('window.SoundTouch:', typeof window.SoundTouch);
+        console.log('window.soundtouch:', typeof window.soundtouch);
+        
+        if (typeof window.SoundTouch !== 'undefined') {
+            console.log('✅ SoundTouch est chargé et disponible');
+        } else if (typeof window.soundtouch !== 'undefined') {
+            console.log('✅ soundtouch (lowercase) est chargé');
+        } else {
+            console.error('❌ SoundTouch n\'est PAS disponible - le fallback playbackRate sera utilisé');
+            console.log('Cela signifie que la vitesse changera aussi la hauteur de la voix (effet chipmunk)');
+        }
+        console.log('==============================');
     }
 
     async loadMicrophones() {
@@ -254,20 +271,45 @@ class ChatApp {
                 });
             }
 
-            // Convert PCM16 to Float32 for Web Audio API
-            const float32 = new Float32Array(pcm16.length);
-            for (let i = 0; i < pcm16.length; i++) {
-                float32[i] = pcm16[i] / 32768.0;
+            let processedSamples;
+
+            // Apply time-stretching if speed is not 1.0
+            if (this.playbackSpeed !== 1.0) {
+                console.log(`[Audio] Applying speed: ${this.playbackSpeed}x`);
+                
+                if (typeof SoundTouch !== 'undefined') {
+                    console.log('[Audio] SoundTouch disponible, utilisation du time-stretching');
+                    processedSamples = this.applyTimeStretching(pcm16, 24000, this.playbackSpeed);
+                } else {
+                    console.warn('[Audio] SoundTouch non disponible, utilisation de playbackRate classique');
+                    // Fallback to simple conversion and we'll use playbackRate
+                    processedSamples = new Float32Array(pcm16.length);
+                    for (let i = 0; i < pcm16.length; i++) {
+                        processedSamples[i] = pcm16[i] / 32768.0;
+                    }
+                }
+            } else {
+                // No time-stretching needed, just convert to Float32
+                processedSamples = new Float32Array(pcm16.length);
+                for (let i = 0; i < pcm16.length; i++) {
+                    processedSamples[i] = pcm16[i] / 32768.0;
+                }
             }
 
             // Create audio buffer
-            const audioBuffer = this.playbackContext.createBuffer(1, float32.length, 24000);
-            audioBuffer.getChannelData(0).set(float32);
+            const audioBuffer = this.playbackContext.createBuffer(1, processedSamples.length, 24000);
+            audioBuffer.getChannelData(0).set(processedSamples);
 
             // Play the audio
             const source = this.playbackContext.createBufferSource();
             source.buffer = audioBuffer;
-            source.playbackRate.value = this.playbackSpeed; // Apply speed control
+            
+            // If SoundTouch isn't available, use playbackRate as fallback
+            if (this.playbackSpeed !== 1.0 && typeof SoundTouch === 'undefined') {
+                source.playbackRate.value = this.playbackSpeed;
+                console.log(`[Audio] Utilisation de playbackRate: ${this.playbackSpeed}x (fallback)`);
+            }
+            
             source.connect(this.playbackContext.destination);
             
             source.onended = () => {
@@ -278,6 +320,68 @@ class ChatApp {
         } catch (error) {
             console.error('Erreur lors de la lecture audio:', error);
             this.playAudioQueue(); // Continue with next audio
+        }
+    }
+
+    applyTimeStretching(pcm16Samples, sampleRate, speed) {
+        try {
+            console.log(`[TimeStretch] Début - Samples: ${pcm16Samples.length}, Speed: ${speed}x`);
+            
+            // Convert Int16 to Float32 for SoundTouch (interleaved stereo format)
+            const float32Input = new Float32Array(pcm16Samples.length * 2); // Stereo
+            for (let i = 0; i < pcm16Samples.length; i++) {
+                const sample = pcm16Samples[i] / 32768.0;
+                float32Input[i * 2] = sample;     // Left channel
+                float32Input[i * 2 + 1] = sample; // Right channel (same for mono)
+            }
+            
+            console.log('[TimeStretch] Création SoundTouch instance');
+            
+            // Create SoundTouch instance
+            const soundTouch = new window.SoundTouch();
+            soundTouch.tempo = speed; // Change tempo (speed) without affecting pitch
+            soundTouch.pitch = 1.0;   // Keep original pitch
+            
+            console.log(`[TimeStretch] Config - Tempo: ${soundTouch.tempo}, Pitch: ${soundTouch.pitch}`);
+            
+            // Feed all input samples to SoundTouch
+            soundTouch.inputBuffer.putSamples(float32Input, 0, pcm16Samples.length);
+            
+            // Process the samples
+            console.log('[TimeStretch] Traitement des samples...');
+            soundTouch.process();
+            
+            // Extract all processed samples
+            const outputFrames = soundTouch.outputBuffer.frameCount;
+            console.log(`[TimeStretch] Frames en sortie: ${outputFrames}`);
+            
+            if (outputFrames === 0) {
+                console.warn('[TimeStretch] Aucune frame en sortie, fallback');
+                throw new Error('No output frames');
+            }
+            
+            const stereoOutput = new Float32Array(outputFrames * 2);
+            soundTouch.outputBuffer.receiveSamples(stereoOutput, outputFrames);
+            
+            // Convert back to mono Float32
+            const monoOutput = new Float32Array(outputFrames);
+            for (let i = 0; i < outputFrames; i++) {
+                monoOutput[i] = stereoOutput[i * 2]; // Take left channel
+            }
+            
+            console.log(`[TimeStretch] ✅ Succès - ${monoOutput.length} samples générés`);
+            return monoOutput;
+            
+        } catch (error) {
+            console.error('[TimeStretch] ❌ Erreur:', error);
+            console.log('[TimeStretch] Fallback: conversion simple sans time-stretching');
+            
+            // Fallback: simple conversion without time-stretching
+            const result = new Float32Array(pcm16Samples.length);
+            for (let i = 0; i < pcm16Samples.length; i++) {
+                result[i] = pcm16Samples[i] / 32768.0;
+            }
+            return result;
         }
     }
 

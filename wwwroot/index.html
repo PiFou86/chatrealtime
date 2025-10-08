@@ -76,6 +76,17 @@
         </div>
     </div>
 
+    <script type="module">
+        // Import SoundTouch as ES6 module
+        import { SoundTouch, SimpleFilter } from 'https://cdn.jsdelivr.net/npm/soundtouchjs@0.1.30/dist/soundtouch.min.js';
+        
+        // Make it globally available
+        window.SoundTouch = SoundTouch;
+        window.SimpleFilter = SimpleFilter;
+        
+        console.log('✅ SoundTouch chargé:', typeof SoundTouch);
+        console.log('✅ SimpleFilter chargé:', typeof SimpleFilter);
+    </script>
     <script src="app.js"></script>
 </body>
 </html>
