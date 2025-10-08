@@ -22,6 +22,7 @@ class ChatApp {
         this.currentTranscript = { user: '', assistant: '' };
         this.audioQueue = [];
         this.isPlayingAudio = false;
+        this.currentResponseId = null;
 
         // Initialize
         this.init();
@@ -128,7 +129,7 @@ class ChatApp {
     }
 
     async handleServerMessage(message) {
-        console.log('Message du serveur:', message.type);
+        console.log('[Client] Message du serveur:', message.type, message);
 
         switch (message.type) {
             case 'ready':
@@ -143,8 +144,10 @@ class ChatApp {
             case 'audio':
                 // Queue audio for playback
                 if (message.audio) {
+                    console.log('[Client] Audio reçu, taille:', message.audio.length);
                     this.audioQueue.push(message.audio);
                     if (!this.isPlayingAudio) {
+                        console.log('[Client] Démarrage lecture audio');
                         this.playAudioQueue();
                     }
                 }
@@ -165,45 +168,77 @@ class ChatApp {
     }
 
     handleTranscript(role, transcript) {
+        console.log('[Client] Transcript reçu - Role:', role, 'Texte:', transcript);
+        
         if (role === 'user') {
-            this.currentTranscript.user += transcript;
-            // Check if we should display the user message
-            if (transcript.trim()) {
+            // User transcript arrives complete from the server
+            console.log('[Client] Traitement transcript utilisateur:', transcript);
+            if (transcript && transcript.trim()) {
+                console.log('[Client] Ajout message utilisateur à l\'interface');
                 this.addUserMessage(transcript);
+            } else {
+                console.warn('[Client] Transcript utilisateur vide ou invalide');
             }
         } else if (role === 'assistant') {
-            this.currentTranscript.assistant += transcript;
+            // Assistant transcript arrives as deltas
             this.updateOrAddAssistantMessage(transcript);
+        } else if (role === 'system' && transcript === '__RESPONSE_DONE__') {
+            // Mark current response as complete
+            this.finalizeCurrentAssistantMessage();
         }
     }
 
     updateOrAddAssistantMessage(delta) {
-        // Find the last assistant message or create a new one
-        const lastMessage = this.messagesContainer.querySelector('.message.ai:last-child');
+        // Find the last assistant message that is still streaming
+        const messages = this.messagesContainer.querySelectorAll('.message.ai');
+        let lastStreamingMessage = null;
         
-        if (lastMessage && lastMessage.dataset.streaming === 'true') {
+        // Find the last message that is still streaming
+        for (let i = messages.length - 1; i >= 0; i--) {
+            if (messages[i].dataset.streaming === 'true') {
+                lastStreamingMessage = messages[i];
+                break;
+            }
+        }
+        
+        if (lastStreamingMessage) {
             // Update existing streaming message
-            const textElement = lastMessage.querySelector('.message-text');
+            const textElement = lastStreamingMessage.querySelector('.message-text');
             textElement.textContent += delta;
             this.scrollToBottom();
         } else {
             // Create new assistant message
             const message = this.createMessageElement('ai', '🤖', 'IA', delta);
             message.dataset.streaming = 'true';
+            message.dataset.responseId = Date.now(); // Unique ID for this response
             this.messagesContainer.appendChild(message);
             this.scrollToBottom();
             this.updateMessageCount();
         }
     }
 
+    finalizeCurrentAssistantMessage() {
+        // Mark the current streaming message as complete
+        const messages = this.messagesContainer.querySelectorAll('.message.ai');
+        for (let i = messages.length - 1; i >= 0; i--) {
+            if (messages[i].dataset.streaming === 'true') {
+                messages[i].dataset.streaming = 'false';
+                console.log('Message assistant finalisé');
+                break;
+            }
+        }
+    }
+
     async playAudioQueue() {
         if (this.audioQueue.length === 0) {
             this.isPlayingAudio = false;
+            console.log('[Client] Queue audio vide');
             return;
         }
 
         this.isPlayingAudio = true;
         const base64Audio = this.audioQueue.shift();
+        console.log('[Client] Lecture audio, reste dans la queue:', this.audioQueue.length);
 
         try {
             // Decode base64 to raw PCM16 data

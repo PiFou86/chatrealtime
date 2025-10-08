@@ -36,6 +36,7 @@ public class RealtimeWebSocketHandler
             // Set up event handlers for OpenAI responses
             openAIService.OnAudioReceived += async (audioData) =>
             {
+                _logger.LogDebug("[Handler] Sending audio to client, size: {Size}", audioData?.Length ?? 0);
                 await SendToClientAsync(clientWebSocket, clientSendLock, new ServerMessage
                 {
                     Type = "audio",
@@ -45,6 +46,7 @@ public class RealtimeWebSocketHandler
 
             openAIService.OnTranscriptReceived += async (role, transcript) =>
             {
+                _logger.LogDebug("[Handler] Sending transcript to client - Role: {Role}, Text: {Text}", role, transcript);
                 await SendToClientAsync(clientWebSocket, clientSendLock, new ServerMessage
                 {
                     Type = "transcript",

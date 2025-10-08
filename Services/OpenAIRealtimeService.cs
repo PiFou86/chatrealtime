@@ -79,9 +79,11 @@ public class OpenAIRealtimeService : IDisposable
                 Voice = _settings.Voice,
                 InputAudioFormat = "pcm16",
                 OutputAudioFormat = "pcm16",
+                // Use gpt-4o-transcribe instead of whisper-1 for realtime transcription
+                // Reference: https://community.openai.com/t/cant-get-the-user-transcription-in-realtime-api/1076308/5
                 InputAudioTranscription = new TranscriptionConfig
                 {
-                    Model = "whisper-1"
+                    Model = "gpt-4o-transcribe"
                 },
                 TurnDetection = new TurnDetectionConfig
                 {
@@ -234,7 +236,13 @@ public class OpenAIRealtimeService : IDisposable
             }
 
             var eventType = typeElement.GetString();
-            _logger.LogDebug("Received event type: {EventType}", eventType);
+            _logger.LogInformation("[OpenAI Event] {EventType}", eventType);
+            
+            // Log full message for debugging transcription issues
+            if (eventType?.Contains("transcript") == true || eventType?.Contains("item.created") == true)
+            {
+                _logger.LogInformation("[OpenAI Event Full] {Message}", message);
+            }
 
             switch (eventType)
             {
@@ -259,17 +267,63 @@ public class OpenAIRealtimeService : IDisposable
                     break;
 
                 case "conversation.item.created":
-                    if (root.TryGetProperty("item", out var item) &&
-                        item.TryGetProperty("content", out var content))
+                    // Check if this item contains a transcript (for user input)
+                    if (root.TryGetProperty("item", out var item))
                     {
-                        foreach (var contentItem in content.EnumerateArray())
+                        var itemType = item.TryGetProperty("type", out var typeVal) ? typeVal.GetString() : null;
+                        var itemRole = item.TryGetProperty("role", out var roleVal) ? roleVal.GetString() : null;
+                        
+                        _logger.LogInformation("[Item Created] Type: {Type}, Role: {Role}", itemType, itemRole);
+                        
+                        // For user messages, check if there's a transcript
+                        if (itemRole == "user" && item.TryGetProperty("content", out var content))
                         {
-                            if (contentItem.TryGetProperty("transcript", out var transcript))
+                            foreach (var contentItem in content.EnumerateArray())
                             {
-                                var role = item.GetProperty("role").GetString() ?? "unknown";
-                                await NotifyTranscript(role, transcript.GetString() ?? "");
+                                if (contentItem.TryGetProperty("transcript", out var transcript))
+                                {
+                                    var transcriptText = transcript.GetString();
+                                    if (!string.IsNullOrEmpty(transcriptText))
+                                    {
+                                        _logger.LogInformation("[User Transcript] {Transcript}", transcriptText);
+                                        await NotifyTranscript("user", transcriptText);
+                                    }
+                                }
                             }
                         }
+                    }
+                    break;
+
+                case "conversation.item.input_audio_transcription.completed":
+                    _logger.LogInformation("[Transcription Event] Processing input_audio_transcription.completed");
+                    if (root.TryGetProperty("transcript", out var userTranscript))
+                    {
+                        var transcriptText = userTranscript.GetString();
+                        _logger.LogInformation("[User Transcript Raw] '{Transcript}' (Empty: {IsEmpty})", 
+                            transcriptText ?? "null", 
+                            string.IsNullOrEmpty(transcriptText));
+                        
+                        if (!string.IsNullOrEmpty(transcriptText))
+                        {
+                            _logger.LogInformation("[User Transcript Complete] Sending to client: {Transcript}", transcriptText);
+                            await NotifyTranscript("user", transcriptText);
+                        }
+                        else
+                        {
+                            _logger.LogWarning("[User Transcript] Transcript is empty or null");
+                        }
+                    }
+                    else
+                    {
+                        _logger.LogWarning("[User Transcript] No 'transcript' property found in event");
+                    }
+                    break;
+
+                case "conversation.item.input_audio_transcription.failed":
+                    _logger.LogError("[Transcription Failed] User audio transcription failed");
+                    if (root.TryGetProperty("error", out var transcriptError))
+                    {
+                        _logger.LogError("[Transcription Error] {Error}", transcriptError);
                     }
                     break;
 
@@ -279,6 +333,7 @@ public class OpenAIRealtimeService : IDisposable
                         var audioData = audioDelta.GetString();
                         if (!string.IsNullOrEmpty(audioData))
                         {
+                            _logger.LogDebug("[Audio Delta] Size: {Size} bytes", audioData.Length);
                             await NotifyAudio(audioData);
                         }
                     }
@@ -290,6 +345,7 @@ public class OpenAIRealtimeService : IDisposable
                         var delta = transcriptDelta.GetString();
                         if (!string.IsNullOrEmpty(delta))
                         {
+                            _logger.LogDebug("[Assistant Transcript Delta] {Delta}", delta);
                             await NotifyTranscript("assistant", delta);
                         }
                     }
@@ -305,6 +361,8 @@ public class OpenAIRealtimeService : IDisposable
                 case "response.done":
                     _logger.LogInformation("Response completed");
                     await NotifyStatus("Ready");
+                    // Notify client that response is complete
+                    await NotifyResponseComplete();
                     break;
 
                 case "error":
@@ -317,7 +375,9 @@ public class OpenAIRealtimeService : IDisposable
                     break;
 
                 default:
-                    _logger.LogDebug("Unhandled event type: {Type}", eventType);
+                    _logger.LogWarning("[OpenAI Event] Unhandled event type: {Type} - Full message: {Message}", 
+                        eventType, 
+                        message.Length > 500 ? message.Substring(0, 500) + "..." : message);
                     break;
             }
         }
@@ -356,6 +416,14 @@ public class OpenAIRealtimeService : IDisposable
         if (OnStatusChanged != null)
         {
             await OnStatusChanged(status);
+        }
+    }
+
+    private async Task NotifyResponseComplete()
+    {
+        if (OnTranscriptReceived != null)
+        {
+            await OnTranscriptReceived("system", "__RESPONSE_DONE__");
         }
     }
 
