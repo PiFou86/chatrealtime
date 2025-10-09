@@ -646,9 +646,9 @@ class ChatApp {
 
     addSystemMessage(text) {
         const messageDiv = document.createElement('div');
-        messageDiv.className = 'message system';
+        messageDiv.className = 'message system text-center py-2';
         messageDiv.innerHTML = `
-            <div class="message-content" style="max-width: 100%; text-align: center; background: #f0f9ff; color: #0369a1; font-size: 14px;">
+            <div class="inline-block px-4 py-2 bg-blue-50 text-blue-700 text-sm rounded-md border border-blue-200">
                 ${text}
             </div>
         `;
@@ -658,21 +658,30 @@ class ChatApp {
 
     createMessageElement(type, avatar, sender, text) {
         const messageDiv = document.createElement('div');
-        messageDiv.className = `message ${type}`;
+        // Keep type class (user/ai) for JavaScript selectors + Tailwind classes
+        messageDiv.className = `message ${type} flex gap-3 ${type === 'user' ? 'flex-row-reverse' : ''}`;
         
         const time = new Date().toLocaleTimeString('fr-FR', { 
             hour: '2-digit', 
             minute: '2-digit' 
         });
 
+        const isUser = type === 'user';
+        const bgClass = isUser ? 'bg-blue-600 text-white' : 'bg-gray-100 text-gray-900';
+        const timeClass = isUser ? 'text-blue-200' : 'text-gray-500';
+
         messageDiv.innerHTML = `
-            <div class="message-avatar">${avatar}</div>
-            <div class="message-content">
-                <div class="message-header">
-                    <span class="message-sender">${sender}</span>
-                    <span class="message-time">${time}</span>
+            <div class="flex-shrink-0 w-8 h-8 rounded-full flex items-center justify-center text-lg ${isUser ? 'bg-blue-100' : 'bg-gray-200'}">
+                ${avatar}
+            </div>
+            <div class="max-w-[70%]">
+                <div class="flex items-center gap-2 mb-1 ${isUser ? 'flex-row-reverse' : ''}">
+                    <span class="text-xs font-semibold text-gray-700">${sender}</span>
+                    <span class="text-xs ${timeClass}">${time}</span>
                 </div>
-                <div class="message-text">${this.escapeHtml(text)}</div>
+                <div class="${bgClass} px-4 py-2 rounded-lg text-sm leading-relaxed message-text">
+                    ${this.escapeHtml(text)}
+                </div>
             </div>
         `;
 
