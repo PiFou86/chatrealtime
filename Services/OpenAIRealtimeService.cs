@@ -209,6 +209,43 @@ public class OpenAIRealtimeService : IDisposable
         await SendToOpenAIAsync(appendEvent, cancellationToken);
     }
 
+    public async Task SendTextAsync(string text, CancellationToken cancellationToken = default)
+    {
+        if (_openAIWebSocket?.State != WebSocketState.Open)
+        {
+            _logger.LogWarning("WebSocket is not open, cannot send text");
+            return;
+        }
+
+        _logger.LogInformation("Sending text message: {Text}", text);
+
+        // Create a conversation item with the user's text
+        var createItemEvent = new ConversationItemCreateEvent
+        {
+            Item = new UserMessageItem
+            {
+                Type = "message",
+                Role = "user",
+                Content = new List<MessageContent>
+                {
+                    new MessageContent
+                    {
+                        Type = "input_text",
+                        Text = text
+                    }
+                }
+            }
+        };
+
+        await SendToOpenAIAsync(createItemEvent, cancellationToken);
+
+        // Trigger a response
+        var responseEvent = new ResponseCreateEvent();
+        await SendToOpenAIAsync(responseEvent, cancellationToken);
+
+        _logger.LogInformation("Text message sent and response triggered");
+    }
+
     public async Task CommitAudioAsync(CancellationToken cancellationToken = default)
     {
         if (_openAIWebSocket?.State != WebSocketState.Open)

@@ -179,6 +179,13 @@ public class RealtimeWebSocketHandler
                     }
                     break;
 
+                case "text":
+                    if (!string.IsNullOrEmpty(clientMessage.Text))
+                    {
+                        await openAIService.SendTextAsync(clientMessage.Text, cancellationToken);
+                    }
+                    break;
+
                 case "audio_commit":
                     await openAIService.CommitAudioAsync(cancellationToken);
                     break;

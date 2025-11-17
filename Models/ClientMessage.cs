@@ -10,6 +10,9 @@ public class ClientMessage
     [JsonPropertyName("audio")]
     public string? Audio { get; set; }
 
+    [JsonPropertyName("text")]
+    public string? Text { get; set; }
+
     [JsonPropertyName("action")]
     public string? Action { get; set; }
 }

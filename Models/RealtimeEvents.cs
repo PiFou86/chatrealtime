@@ -162,7 +162,7 @@ public class ConversationItemCreateEvent : RealtimeEvent
     }
 
     [JsonPropertyName("item")]
-    public FunctionCallOutputItem Item { get; set; } = new();
+    public object Item { get; set; } = new();
 }
 
 public class FunctionCallOutputItem
@@ -175,6 +175,27 @@ public class FunctionCallOutputItem
 
     [JsonPropertyName("output")]
     public string? Output { get; set; }
+}
+
+public class UserMessageItem
+{
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = "message";
+
+    [JsonPropertyName("role")]
+    public string Role { get; set; } = "user";
+
+    [JsonPropertyName("content")]
+    public List<MessageContent> Content { get; set; } = new();
+}
+
+public class MessageContent
+{
+    [JsonPropertyName("type")]
+    public string Type { get; set; } = string.Empty;
+
+    [JsonPropertyName("text")]
+    public string? Text { get; set; }
 }
 
 // Server events (received from OpenAI)

@@ -10,9 +10,15 @@ class ChatApp {
         this.durationElement = document.getElementById('duration');
         this.playbackSpeedSlider = document.getElementById('playback-speed');
         this.speedValueDisplay = document.getElementById('speed-value');
+        this.textInput = document.getElementById('text-input');
+        this.sendTextButton = document.getElementById('send-text-button');
+        this.toggleAudioButton = document.getElementById('toggle-audio');
+        this.audioIcon = document.getElementById('audio-icon');
+        this.audioStatusText = document.getElementById('audio-status-text');
 
         // State
         this.isListening = false;
+        this.audioEnabled = true; // Audio playback enabled by default
         this.ws = null;
         this.messageCount = 0;
         this.startTime = null;
@@ -96,6 +102,24 @@ class ChatApp {
             this.playbackSpeed = parseFloat(e.target.value);
             this.speedValueDisplay.textContent = this.playbackSpeed.toFixed(1) + 'x';
         });
+
+        // Text input events
+        this.sendTextButton.addEventListener('click', () => {
+            this.sendTextMessage();
+        });
+
+        this.textInput.addEventListener('keydown', (e) => {
+            // Send on Enter (without Shift)
+            if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                this.sendTextMessage();
+            }
+        });
+
+        // Audio toggle button
+        this.toggleAudioButton.addEventListener('click', () => {
+            this.toggleAudioPlayback();
+        });
     }
 
     async connectWebSocket() {
@@ -165,8 +189,13 @@ class ChatApp {
                 break;
 
             case 'audio':
-                // Queue audio for playback
+                // Queue audio for playback (only if audio is enabled)
                 if (message.audio) {
+                    if (!this.audioEnabled) {
+                        console.log('[Audio] Audio désactivé, chunk ignoré');
+                        break;
+                    }
+                    
                     this.audioQueue.push(message.audio);
                     
                     // Si on n'est pas en train de jouer et qu'on a assez de buffer, commencer
@@ -301,7 +330,15 @@ class ChatApp {
     }
 
     async playAudioQueue() {
-        console.log(`[PlayQueue] Appelé - Queue: ${this.audioQueue.length}, isPlaying: ${this.isPlayingAudio}`);
+        console.log(`[PlayQueue] Appelé - Queue: ${this.audioQueue.length}, isPlaying: ${this.isPlayingAudio}, audioEnabled: ${this.audioEnabled}`);
+        
+        // Don't play if audio is disabled
+        if (!this.audioEnabled) {
+            console.log('[PlayQueue] Audio désactivé, arrêt');
+            this.isPlayingAudio = false;
+            this.audioQueue = [];
+            return;
+        }
         
         if (this.audioQueue.length === 0) {
             this.isPlayingAudio = false;
@@ -702,6 +739,78 @@ class ChatApp {
         const div = document.createElement('div');
         div.textContent = text;
         return div.innerHTML;
+    }
+
+    async sendTextMessage() {
+        const text = this.textInput.value.trim();
+        
+        if (!text) {
+            return;
+        }
+
+        // Check if we need to connect first
+        if (!this.ws || this.ws.readyState !== WebSocket.OPEN) {
+            try {
+                // Clear welcome message if present
+                const welcomeMessage = this.messagesContainer.querySelector('.welcome-message');
+                if (welcomeMessage) {
+                    welcomeMessage.remove();
+                }
+
+                this.updateStatus('Connexion...');
+                await this.connectWebSocket();
+                this.updateStatus('Connecté', 'ready');
+            } catch (error) {
+                console.error('Erreur lors de la connexion:', error);
+                this.addSystemMessage('❌ Impossible de se connecter au serveur');
+                return;
+            }
+        }
+
+        // Add user message to UI
+        this.addUserMessage(text);
+
+        // Clear the input
+        this.textInput.value = '';
+
+        // Send to server
+        try {
+            this.ws.send(JSON.stringify({
+                type: 'text',
+                text: text
+            }));
+            
+            this.updateStatus('Envoi du message...', 'listening');
+        } catch (error) {
+            console.error('Erreur lors de l\'envoi du message:', error);
+            this.addSystemMessage('❌ Erreur lors de l\'envoi du message');
+        }
+    }
+
+    toggleAudioPlayback() {
+        this.audioEnabled = !this.audioEnabled;
+        
+        if (this.audioEnabled) {
+            // Audio enabled
+            this.audioIcon.textContent = '🔊';
+            this.audioStatusText.textContent = 'Audio activé';
+            this.toggleAudioButton.classList.remove('bg-gray-600', 'hover:bg-gray-700');
+            this.toggleAudioButton.classList.add('bg-green-600', 'hover:bg-green-700');
+            console.log('[Audio] ✅ Lecture audio activée');
+        } else {
+            // Audio disabled - stop current playback and clear queue
+            this.audioIcon.textContent = '🔇';
+            this.audioStatusText.textContent = 'Audio désactivé';
+            this.toggleAudioButton.classList.remove('bg-green-600', 'hover:bg-green-700');
+            this.toggleAudioButton.classList.add('bg-gray-600', 'hover:bg-gray-700');
+            
+            console.log('[Audio] 🔇 Lecture audio désactivée');
+            
+            // Stop any currently playing audio
+            if (this.isPlayingAudio) {
+                this.stopAudioPlayback();
+            }
+        }
     }
 }
 

@@ -67,7 +67,7 @@
                         </select>
                     </div>
 
-                    <!-- Playback Speed -->
+                    <!-- Audio Toggle & Playback Speed -->
                     <div class="space-y-2">
                         <label for="playback-speed" class="flex items-center gap-2 text-sm font-medium text-gray-700">
                             <svg class="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
@@ -84,6 +84,13 @@
                             <span>1.5x</span>
                             <span>2.0x</span>
                         </div>
+                        
+                        <!-- Audio Toggle Button -->
+                        <button id="toggle-audio" 
+                                class="w-full mt-2 px-3 py-2 bg-green-600 text-white text-xs font-medium rounded-md hover:bg-green-700 focus:outline-none focus:ring-2 focus:ring-green-500 transition-colors flex items-center justify-center gap-2">
+                            <span id="audio-icon">🔊</span>
+                            <span id="audio-status-text">Audio activé</span>
+                        </button>
                     </div>
 
                     <!-- Toggle Button & Status -->
@@ -114,6 +121,23 @@
                         <p class="text-sm text-gray-600">Sélectionnez un microphone et commencez à parler avec l'IA.</p>
                     </div>
 
+                </div>
+            </div>
+
+            <!-- Text Input Area -->
+            <div class="border-t border-gray-200 bg-white px-6 py-4">
+                <div class="flex gap-3 items-end">
+                    <div class="flex-1">
+                        <textarea id="text-input" 
+                                  placeholder="Tapez votre message ici... (Entrée pour envoyer, Shift+Entrée pour une nouvelle ligne)"
+                                  rows="2"
+                                  class="w-full px-4 py-3 text-sm border border-gray-300 rounded-lg resize-none focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"></textarea>
+                    </div>
+                    <button id="send-text-button"
+                            class="px-6 py-3 bg-blue-600 text-white text-sm font-medium rounded-lg hover:bg-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 transition-colors flex items-center gap-2 whitespace-nowrap">
+                        <span>Envoyer</span>
+                        <span>📤</span>
+                    </button>
                 </div>
             </div>
 
