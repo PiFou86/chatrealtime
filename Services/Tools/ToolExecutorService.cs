@@ -38,9 +38,145 @@ public class ToolExecutorService : IToolExecutor
         return toolConfig.Type.ToLowerInvariant() switch
         {
             "http" => await ExecuteHttpToolAsync(toolConfig, arguments),
+            "mcp" => await ExecuteMcpToolAsync(toolConfig, arguments),
             "builtin" => await ExecuteBuiltinToolAsync(toolName, arguments),
             _ => throw new ArgumentException($"Unknown tool type: {toolConfig.Type}")
         };
+    }
+
+    private async Task<object> ExecuteMcpToolAsync(ToolConfig toolConfig, JsonElement arguments)
+    {
+        if (toolConfig.Http == null)
+        {
+            throw new InvalidOperationException($"HTTP configuration missing for MCP tool: {toolConfig.Name}");
+        }
+
+        var httpConfig = toolConfig.Http;
+        _logger.LogInformation("Executing MCP tool: {Url}", httpConfig.Url);
+
+        // Use named client with Polly policies
+        var httpClient = _httpClientFactory.CreateClient("ToolsHttpClient");
+        
+        // Add custom headers
+        foreach (var header in httpConfig.Headers)
+        {
+            httpClient.DefaultRequestHeaders.TryAddWithoutValidation(header.Key, header.Value);
+        }
+
+        // Extract MCP method and params from arguments
+        string mcpMethod = "resources/list"; // default
+        object? mcpParams = null;
+
+        var argumentsDict = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(arguments.GetRawText());
+        if (argumentsDict != null)
+        {
+            if (argumentsDict.TryGetValue("method", out var methodElement))
+            {
+                mcpMethod = methodElement.GetString() ?? "resources/list";
+            }
+            
+            if (argumentsDict.TryGetValue("params", out var paramsElement))
+            {
+                // Parse params as a dictionary to properly serialize it
+                try
+                {
+                    var paramsDict = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(paramsElement.GetRawText());
+                    mcpParams = paramsDict;
+                }
+                catch
+                {
+                    mcpParams = JsonSerializer.Deserialize<object>(paramsElement.GetRawText());
+                }
+            }
+            // If no explicit "params", check if other keys exist (like "uri" directly)
+            else if (argumentsDict.Count > 1 || (argumentsDict.Count == 1 && !argumentsDict.ContainsKey("method")))
+            {
+                // Extract all other keys as params
+                var paramDict = new Dictionary<string, object?>();
+                foreach (var kvp in argumentsDict)
+                {
+                    if (kvp.Key != "method")
+                    {
+                        paramDict[kvp.Key] = JsonSerializer.Deserialize<object>(kvp.Value.GetRawText());
+                    }
+                }
+                if (paramDict.Count > 0)
+                {
+                    mcpParams = paramDict;
+                }
+            }
+        }
+
+        // Determine the actual method based on tool name if not explicitly provided
+        if (mcpMethod == "resources/list" && toolConfig.Name == "mcp_read_resource")
+        {
+            mcpMethod = "resources/read";
+        }
+        else if (mcpMethod == "resources/list" && toolConfig.Name == "mcp_list_tools")
+        {
+            mcpMethod = "tools/list";
+        }
+        else if (mcpMethod == "resources/list" && toolConfig.Name == "mcp_call_tool")
+        {
+            mcpMethod = "tools/call";
+        }
+
+        // Build JSON-RPC request with numeric ID (required by MCP protocol)
+        var mcpRequest = new
+        {
+            jsonrpc = "2.0",
+            id = Random.Shared.Next(1, 1000000),
+            method = mcpMethod,
+            @params = mcpParams
+        };
+
+        var jsonOptions = new JsonSerializerOptions
+        {
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+        };
+
+        var requestJson = JsonSerializer.Serialize(mcpRequest, jsonOptions);
+        _logger.LogInformation("MCP Request: {Request}", requestJson);
+
+        var content = new StringContent(
+            requestJson,
+            System.Text.Encoding.UTF8,
+            "application/json");
+
+        var response = await httpClient.PostAsync(httpConfig.Url, content);
+        response.EnsureSuccessStatusCode();
+        
+        var responseBody = await response.Content.ReadAsStringAsync();
+        _logger.LogInformation("MCP Response: {Response}", responseBody);
+
+        try
+        {
+            // Parse JSON-RPC response
+            using var doc = JsonDocument.Parse(responseBody);
+            var root = doc.RootElement;
+
+            // Check for error in JSON-RPC response
+            if (root.TryGetProperty("error", out var errorElement))
+            {
+                var errorMessage = errorElement.TryGetProperty("message", out var msg) 
+                    ? msg.GetString() 
+                    : "Unknown MCP error";
+                throw new InvalidOperationException($"MCP Error: {errorMessage}");
+            }
+
+            // Return the result field from JSON-RPC response
+            if (root.TryGetProperty("result", out var resultElement))
+            {
+                return JsonSerializer.Deserialize<object>(resultElement.GetRawText()) ?? new { };
+            }
+
+            return new { response = responseBody };
+        }
+        catch (JsonException)
+        {
+            // Return as string if not valid JSON
+            return new { response = responseBody };
+        }
     }
 
     private async Task<object> ExecuteHttpToolAsync(ToolConfig toolConfig, JsonElement arguments)

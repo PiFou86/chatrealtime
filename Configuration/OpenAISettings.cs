@@ -15,6 +15,7 @@ public class OpenAISettings
     public string Instructions { get; set; } = string.Empty;
     public TurnDetectionSettings TurnDetection { get; set; } = new();
     public List<ToolConfig> Tools { get; set; } = new();
+    public List<McpServerConfig> McpServers { get; set; } = new();
     public ResilienceSettings Resilience { get; set; } = new();
 }
 
@@ -72,4 +73,11 @@ public class TimeoutSettings
 {
     public bool Enabled { get; set; } = true;
     public int TimeoutSeconds { get; set; } = 30;
+}
+
+public class McpServerConfig
+{
+    public string Name { get; set; } = string.Empty;
+    public string Url { get; set; } = string.Empty;
+    public string Description { get; set; } = string.Empty;
 }

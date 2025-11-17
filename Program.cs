@@ -10,7 +10,25 @@ var builder = WebApplication.CreateBuilder(args);
 
 // Configure OpenAI settings from appsettings.json
 var openAISettings = builder.Configuration.GetSection("OpenAI").Get<OpenAISettings>() ?? new OpenAISettings();
-builder.Services.Configure<OpenAISettings>(builder.Configuration.GetSection("OpenAI"));
+
+// Generate MCP tools automatically from McpServers configuration
+if (openAISettings.McpServers != null && openAISettings.McpServers.Any())
+{
+    var logger = builder.Services.BuildServiceProvider().GetRequiredService<ILogger<Program>>();
+    openAISettings.Tools ??= new List<ToolConfig>();
+    
+    foreach (var mcpServer in openAISettings.McpServers)
+    {
+        logger.LogInformation("Generating MCP tools for server: {Name} at {Url}", mcpServer.Name, mcpServer.Url);
+        openAISettings.Tools.AddRange(GenerateMcpTools(mcpServer));
+    }
+}
+
+builder.Services.Configure<OpenAISettings>(options =>
+{
+    builder.Configuration.GetSection("OpenAI").Bind(options);
+    options.Tools = openAISettings.Tools;
+});
 
 // Add services to the container
 builder.Services.AddOpenApi();
@@ -158,3 +176,110 @@ app.Map("/ws/realtime", async context =>
 });
 
 app.Run();
+
+// Helper method to generate MCP tools
+static List<ToolConfig> GenerateMcpTools(McpServerConfig mcpServer)
+{
+    var tools = new List<ToolConfig>();
+    var serverPrefix = string.IsNullOrEmpty(mcpServer.Name) ? "mcp" : mcpServer.Name;
+    var serverDesc = string.IsNullOrEmpty(mcpServer.Description) ? "serveur MCP" : mcpServer.Description;
+
+    // 1. List Resources
+    tools.Add(new ToolConfig
+    {
+        Name = $"{serverPrefix}_list_resources",
+        Description = $"Lister toutes les ressources disponibles sur {serverDesc}",
+        Type = "mcp",
+        Parameters = System.Text.Json.JsonSerializer.SerializeToElement(new
+        {
+            type = "object",
+            properties = new { }
+        }),
+        Http = new HttpToolConfig
+        {
+            Url = mcpServer.Url,
+            Method = "POST",
+            Headers = new Dictionary<string, string> { { "Content-Type", "application/json" } }
+        }
+    });
+
+    // 2. List Tools
+    tools.Add(new ToolConfig
+    {
+        Name = $"{serverPrefix}_list_tools",
+        Description = $"Lister tous les outils disponibles sur {serverDesc}",
+        Type = "mcp",
+        Parameters = System.Text.Json.JsonSerializer.SerializeToElement(new
+        {
+            type = "object",
+            properties = new { }
+        }),
+        Http = new HttpToolConfig
+        {
+            Url = mcpServer.Url,
+            Method = "POST",
+            Headers = new Dictionary<string, string> { { "Content-Type", "application/json" } }
+        }
+    });
+
+    // 3. Read Resource
+    tools.Add(new ToolConfig
+    {
+        Name = $"{serverPrefix}_read_resource",
+        Description = $"Lire le contenu d'une ressource spécifique de {serverDesc}. L'URI est obtenu via {serverPrefix}_list_resources.",
+        Type = "mcp",
+        Parameters = System.Text.Json.JsonSerializer.SerializeToElement(new
+        {
+            type = "object",
+            properties = new
+            {
+                uri = new
+                {
+                    type = "string",
+                    description = "URI de la ressource à lire (ex: 'file:///path/to/file.txt')"
+                }
+            },
+            required = new[] { "uri" }
+        }),
+        Http = new HttpToolConfig
+        {
+            Url = mcpServer.Url,
+            Method = "POST",
+            Headers = new Dictionary<string, string> { { "Content-Type", "application/json" } }
+        }
+    });
+
+    // 4. Call Tool
+    tools.Add(new ToolConfig
+    {
+        Name = $"{serverPrefix}_call_tool",
+        Description = $"Appeler un outil spécifique de {serverDesc}. Le nom de l'outil est obtenu via {serverPrefix}_list_tools.",
+        Type = "mcp",
+        Parameters = System.Text.Json.JsonSerializer.SerializeToElement(new
+        {
+            type = "object",
+            properties = new
+            {
+                name = new
+                {
+                    type = "string",
+                    description = "Nom de l'outil MCP à appeler"
+                },
+                arguments = new
+                {
+                    type = "object",
+                    description = "Arguments à passer à l'outil (optionnel)"
+                }
+            },
+            required = new[] { "name" }
+        }),
+        Http = new HttpToolConfig
+        {
+            Url = mcpServer.Url,
+            Method = "POST",
+            Headers = new Dictionary<string, string> { { "Content-Type", "application/json" } }
+        }
+    });
+
+    return tools;
+}
