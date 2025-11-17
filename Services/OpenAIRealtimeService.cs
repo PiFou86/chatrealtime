@@ -18,6 +18,7 @@ public class OpenAIRealtimeService : IDisposable
     private CancellationTokenSource? _receiveCts;
     private string _systemInstructions = string.Empty;
     private bool _isResponseActive = false; // Track if assistant is currently responding
+    private string _mcpDiscoveryInfo = string.Empty; // MCP capabilities discovered at startup
 
     public event Func<string, Task>? OnAudioReceived;
     public event Func<string, string, Task>? OnTranscriptReceived; // role, transcript
@@ -66,6 +67,64 @@ public class OpenAIRealtimeService : IDisposable
         }
     }
 
+    private async Task DiscoverMcpCapabilitiesAsync(CancellationToken cancellationToken)
+    {
+        if (_settings.McpServers == null || !_settings.McpServers.Any())
+        {
+            _logger.LogInformation("No MCP servers configured, skipping discovery");
+            return;
+        }
+
+        var discoveryInfo = new System.Text.StringBuilder();
+        discoveryInfo.AppendLine("\n\n## 🔧 Capacités MCP découvertes au démarrage\n");
+
+        foreach (var mcpServer in _settings.McpServers)
+        {
+            var serverPrefix = string.IsNullOrEmpty(mcpServer.Name) ? "mcp" : mcpServer.Name;
+            discoveryInfo.AppendLine($"\n### Serveur: {mcpServer.Description} ({mcpServer.Url})\n");
+
+            try
+            {
+                // 1. Ping
+                _logger.LogInformation("Pinging MCP server: {Name}", mcpServer.Name);
+                var pingResult = await _toolExecutor.ExecuteAsync($"{serverPrefix}_ping", 
+                    System.Text.Json.JsonSerializer.SerializeToElement(new { }));
+                discoveryInfo.AppendLine($"✅ **Serveur accessible** (ping réussi)");
+
+                // 2. List Tools
+                _logger.LogInformation("Discovering tools from MCP server: {Name}", mcpServer.Name);
+                var toolsResult = await _toolExecutor.ExecuteAsync($"{serverPrefix}_list_tools", 
+                    System.Text.Json.JsonSerializer.SerializeToElement(new { }));
+                discoveryInfo.AppendLine($"\n**Outils disponibles:**");
+                discoveryInfo.AppendLine($"```json\n{System.Text.Json.JsonSerializer.Serialize(toolsResult, new System.Text.Json.JsonSerializerOptions { WriteIndented = true })}\n```");
+
+                // 3. List Resources
+                _logger.LogInformation("Discovering resources from MCP server: {Name}", mcpServer.Name);
+                var resourcesResult = await _toolExecutor.ExecuteAsync($"{serverPrefix}_list_resources", 
+                    System.Text.Json.JsonSerializer.SerializeToElement(new { }));
+                discoveryInfo.AppendLine($"\n**Ressources disponibles:**");
+                discoveryInfo.AppendLine($"```json\n{System.Text.Json.JsonSerializer.Serialize(resourcesResult, new System.Text.Json.JsonSerializerOptions { WriteIndented = true })}\n```");
+
+                // 4. List Prompts
+                _logger.LogInformation("Discovering prompts from MCP server: {Name}", mcpServer.Name);
+                var promptsResult = await _toolExecutor.ExecuteAsync($"{serverPrefix}_list_prompts", 
+                    System.Text.Json.JsonSerializer.SerializeToElement(new { }));
+                discoveryInfo.AppendLine($"\n**Prompts disponibles:**");
+                discoveryInfo.AppendLine($"```json\n{System.Text.Json.JsonSerializer.Serialize(promptsResult, new System.Text.Json.JsonSerializerOptions { WriteIndented = true })}\n```");
+
+                _logger.LogInformation("Successfully discovered MCP capabilities from {Name}", mcpServer.Name);
+            }
+            catch (Exception ex)
+            {
+                _logger.LogWarning(ex, "Failed to discover capabilities from MCP server: {Name}", mcpServer.Name);
+                discoveryInfo.AppendLine($"⚠️ **Erreur lors de la découverte:** {ex.Message}");
+            }
+        }
+
+        _mcpDiscoveryInfo = discoveryInfo.ToString();
+        _logger.LogInformation("MCP discovery completed");
+    }
+
     public async Task<bool> ConnectAsync(CancellationToken cancellationToken = default)
     {
         try
@@ -88,6 +147,9 @@ public class OpenAIRealtimeService : IDisposable
             _logger.LogInformation("Connected to OpenAI Realtime API");
 
             await NotifyStatus("Connected to OpenAI");
+
+            // Discover MCP capabilities before configuring session
+            await DiscoverMcpCapabilitiesAsync(cancellationToken);
 
             // Configure session
             await ConfigureSessionAsync(cancellationToken);
@@ -160,12 +222,19 @@ public class OpenAIRealtimeService : IDisposable
                 string.Join(", ", tools.Select(t => t.Name)));
         }
 
+        // Combine system instructions with MCP discovery info
+        var fullInstructions = _systemInstructions;
+        if (!string.IsNullOrEmpty(_mcpDiscoveryInfo))
+        {
+            fullInstructions += _mcpDiscoveryInfo;
+        }
+
         var sessionUpdate = new SessionUpdateEvent
         {
             Session = new SessionConfig
             {
                 Modalities = new[] { "text", "audio" },
-                Instructions = _systemInstructions,
+                Instructions = fullInstructions,
                 Voice = _settings.Voice,
                 InputAudioFormat = "pcm16",
                 OutputAudioFormat = "pcm16",

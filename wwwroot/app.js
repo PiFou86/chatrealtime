@@ -663,15 +663,37 @@ class ChatApp {
     }
 
     addUserMessageBeforeLastAssistant(text) {
-        // Find the last assistant message
+        // Find the last assistant message that is currently streaming
         const assistantMessages = this.messagesContainer.querySelectorAll('.message.ai');
+        let targetAssistantMessage = null;
+        
+        // Find the last streaming assistant message
+        for (let i = assistantMessages.length - 1; i >= 0; i--) {
+            if (assistantMessages[i].dataset.streaming === 'true') {
+                targetAssistantMessage = assistantMessages[i];
+                break;
+            }
+        }
+        
+        // If no streaming message found, check if we already have a user message for this response
+        if (!targetAssistantMessage && assistantMessages.length > 0) {
+            const lastAssistant = assistantMessages[assistantMessages.length - 1];
+            const previousElement = lastAssistant.previousElementSibling;
+            
+            // If there's already a user message before the last assistant, don't add another
+            if (previousElement && previousElement.classList.contains('user')) {
+                console.log('[Transcript] User message already exists before assistant response');
+                return;
+            }
+            
+            targetAssistantMessage = lastAssistant;
+        }
         
         const message = this.createMessageElement('user', '👤', 'Vous', text);
         
-        if (assistantMessages.length > 0) {
-            // Insert before the last assistant message
-            const lastAssistant = assistantMessages[assistantMessages.length - 1];
-            this.messagesContainer.insertBefore(message, lastAssistant);
+        if (targetAssistantMessage) {
+            // Insert before the target assistant message
+            this.messagesContainer.insertBefore(message, targetAssistantMessage);
         } else {
             // No assistant message yet, just append
             this.messagesContainer.appendChild(message);

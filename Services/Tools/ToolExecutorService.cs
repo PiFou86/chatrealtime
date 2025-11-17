@@ -52,7 +52,7 @@ public class ToolExecutorService : IToolExecutor
         }
 
         var httpConfig = toolConfig.Http;
-        _logger.LogInformation("Executing MCP tool: {Url}", httpConfig.Url);
+        _logger.LogInformation("[MCP {ToolName}] RAW arguments received: {Arguments}", toolConfig.Name, arguments.GetRawText());
 
         // Use named client with Polly policies
         var httpClient = _httpClientFactory.CreateClient("ToolsHttpClient");
@@ -68,6 +68,9 @@ public class ToolExecutorService : IToolExecutor
         object? mcpParams = null;
 
         var argumentsDict = JsonSerializer.Deserialize<Dictionary<string, JsonElement>>(arguments.GetRawText());
+        _logger.LogInformation("[MCP {ToolName}] Parsed arguments dictionary: {Dict}", 
+            toolConfig.Name, 
+            argumentsDict != null ? string.Join(", ", argumentsDict.Keys) : "null");
         if (argumentsDict != null)
         {
             if (argumentsDict.TryGetValue("method", out var methodElement))
@@ -88,18 +91,41 @@ public class ToolExecutorService : IToolExecutor
                     mcpParams = JsonSerializer.Deserialize<object>(paramsElement.GetRawText());
                 }
             }
-            // If no explicit "params", check if other keys exist (like "uri" directly)
-            else if (argumentsDict.Count > 1 || (argumentsDict.Count == 1 && !argumentsDict.ContainsKey("method")))
+            // If no explicit "params", extract all keys as params
+            else if (argumentsDict.Count > 0 && !argumentsDict.ContainsKey("method"))
             {
-                // Extract all other keys as params
+                // All arguments become the params
                 var paramDict = new Dictionary<string, object?>();
                 foreach (var kvp in argumentsDict)
                 {
-                    if (kvp.Key != "method")
+                    try
                     {
-                        paramDict[kvp.Key] = JsonSerializer.Deserialize<object>(kvp.Value.GetRawText());
+                        var keyName = kvp.Key;
+                        
+                        // Normalize "input" to "arguments" for MCP tools/call
+                        if (keyName == "input" && toolConfig.Name.EndsWith("_call_tool"))
+                        {
+                            keyName = "arguments";
+                            _logger.LogInformation("[MCP {ToolName}] Normalizing 'input' -> 'arguments'", toolConfig.Name);
+                        }
+                        
+                        // Special handling for nested "arguments" field (for tools/call)
+                        if (keyName == "arguments" && kvp.Value.ValueKind == JsonValueKind.Object)
+                        {
+                            var nestedDict = JsonSerializer.Deserialize<Dictionary<string, object>>(kvp.Value.GetRawText());
+                            paramDict[keyName] = nestedDict;
+                        }
+                        else
+                        {
+                            paramDict[keyName] = JsonSerializer.Deserialize<object>(kvp.Value.GetRawText());
+                        }
+                    }
+                    catch
+                    {
+                        paramDict[kvp.Key] = kvp.Value.GetRawText();
                     }
                 }
+                
                 if (paramDict.Count > 0)
                 {
                     mcpParams = paramDict;
@@ -108,18 +134,39 @@ public class ToolExecutorService : IToolExecutor
         }
 
         // Determine the actual method based on tool name if not explicitly provided
-        if (mcpMethod == "resources/list" && toolConfig.Name == "mcp_read_resource")
+        if (mcpMethod == "resources/list")
         {
-            mcpMethod = "resources/read";
+            if (toolConfig.Name.EndsWith("_read_resource"))
+            {
+                mcpMethod = "resources/read";
+            }
+            else if (toolConfig.Name.EndsWith("_list_tools"))
+            {
+                mcpMethod = "tools/list";
+            }
+            else if (toolConfig.Name.EndsWith("_call_tool"))
+            {
+                mcpMethod = "tools/call";
+            }
+            else if (toolConfig.Name.EndsWith("_list_prompts"))
+            {
+                mcpMethod = "prompts/list";
+            }
+            else if (toolConfig.Name.EndsWith("_get_prompt"))
+            {
+                mcpMethod = "prompts/get";
+            }
+            else if (toolConfig.Name.EndsWith("_ping"))
+            {
+                mcpMethod = "ping";
+            }
         }
-        else if (mcpMethod == "resources/list" && toolConfig.Name == "mcp_list_tools")
-        {
-            mcpMethod = "tools/list";
-        }
-        else if (mcpMethod == "resources/list" && toolConfig.Name == "mcp_call_tool")
-        {
-            mcpMethod = "tools/call";
-        }
+
+        // Log the final method and params before building request
+        _logger.LogInformation("[MCP {ToolName}] Final: method={Method}, params={Params}", 
+            toolConfig.Name, 
+            mcpMethod, 
+            mcpParams != null ? JsonSerializer.Serialize(mcpParams) : "null");
 
         // Build JSON-RPC request with numeric ID (required by MCP protocol)
         var mcpRequest = new
@@ -136,7 +183,7 @@ public class ToolExecutorService : IToolExecutor
         };
 
         var requestJson = JsonSerializer.Serialize(mcpRequest, jsonOptions);
-        _logger.LogInformation("MCP Request: {Request}", requestJson);
+        _logger.LogInformation("[MCP {ToolName}] Sending request: {Request}", toolConfig.Name, requestJson);
 
         var content = new StringContent(
             requestJson,
@@ -147,7 +194,9 @@ public class ToolExecutorService : IToolExecutor
         response.EnsureSuccessStatusCode();
         
         var responseBody = await response.Content.ReadAsStringAsync();
-        _logger.LogInformation("MCP Response: {Response}", responseBody);
+        _logger.LogInformation("[MCP {ToolName}] Received response: {Response}", 
+            toolConfig.Name, 
+            responseBody.Length > 500 ? responseBody.Substring(0, 500) + "..." : responseBody);
 
         try
         {

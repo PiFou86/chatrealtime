@@ -281,5 +281,75 @@ static List<ToolConfig> GenerateMcpTools(McpServerConfig mcpServer)
         }
     });
 
+    // 5. List Prompts
+    tools.Add(new ToolConfig
+    {
+        Name = $"{serverPrefix}_list_prompts",
+        Description = $"Lister tous les prompts (templates de prompts) disponibles sur {serverDesc}",
+        Type = "mcp",
+        Parameters = System.Text.Json.JsonSerializer.SerializeToElement(new
+        {
+            type = "object",
+            properties = new { }
+        }),
+        Http = new HttpToolConfig
+        {
+            Url = mcpServer.Url,
+            Method = "POST",
+            Headers = new Dictionary<string, string> { { "Content-Type", "application/json" } }
+        }
+    });
+
+    // 6. Get Prompt
+    tools.Add(new ToolConfig
+    {
+        Name = $"{serverPrefix}_get_prompt",
+        Description = $"Obtenir un prompt spécifique de {serverDesc}. Le nom du prompt est obtenu via {serverPrefix}_list_prompts.",
+        Type = "mcp",
+        Parameters = System.Text.Json.JsonSerializer.SerializeToElement(new
+        {
+            type = "object",
+            properties = new
+            {
+                name = new
+                {
+                    type = "string",
+                    description = "Nom du prompt à obtenir"
+                },
+                arguments = new
+                {
+                    type = "object",
+                    description = "Arguments pour le prompt (optionnel)"
+                }
+            },
+            required = new[] { "name" }
+        }),
+        Http = new HttpToolConfig
+        {
+            Url = mcpServer.Url,
+            Method = "POST",
+            Headers = new Dictionary<string, string> { { "Content-Type", "application/json" } }
+        }
+    });
+
+    // 7. Ping (health check)
+    tools.Add(new ToolConfig
+    {
+        Name = $"{serverPrefix}_ping",
+        Description = $"Vérifier que {serverDesc} est accessible et fonctionnel (health check)",
+        Type = "mcp",
+        Parameters = System.Text.Json.JsonSerializer.SerializeToElement(new
+        {
+            type = "object",
+            properties = new { }
+        }),
+        Http = new HttpToolConfig
+        {
+            Url = mcpServer.Url,
+            Method = "POST",
+            Headers = new Dictionary<string, string> { { "Content-Type", "application/json" } }
+        }
+    });
+
     return tools;
 }
