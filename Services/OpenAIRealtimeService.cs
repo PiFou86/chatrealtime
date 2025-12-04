@@ -13,12 +13,14 @@ public class OpenAIRealtimeService : IDisposable
     private readonly OpenAISettings _settings;
     private readonly ILogger<OpenAIRealtimeService> _logger;
     private readonly IToolExecutor _toolExecutor;
+    private readonly McpDiscoveryService _mcpDiscovery;
     private ClientWebSocket? _openAIWebSocket;
     private readonly SemaphoreSlim _sendLock = new(1, 1);
     private CancellationTokenSource? _receiveCts;
     private string _systemInstructions = string.Empty;
     private bool _isResponseActive = false; // Track if assistant is currently responding
     private string _mcpDiscoveryInfo = string.Empty; // MCP capabilities discovered at startup
+    private List<ToolConfig> _discoveredMcpTools = new(); // Dynamically discovered MCP tools
 
     public event Func<string, Task>? OnAudioReceived;
     public event Func<string, string, Task>? OnTranscriptReceived; // role, transcript
@@ -28,11 +30,13 @@ public class OpenAIRealtimeService : IDisposable
     public OpenAIRealtimeService(
         IOptions<OpenAISettings> settings,
         ILogger<OpenAIRealtimeService> logger,
-        IToolExecutor toolExecutor)
+        IToolExecutor toolExecutor,
+        McpDiscoveryService mcpDiscovery)
     {
         _settings = settings.Value;
         _logger = logger;
         _toolExecutor = toolExecutor;
+        _mcpDiscovery = mcpDiscovery;
         LoadSystemInstructions();
     }
 
@@ -75,54 +79,27 @@ public class OpenAIRealtimeService : IDisposable
             return;
         }
 
-        var discoveryInfo = new System.Text.StringBuilder();
-        discoveryInfo.AppendLine("\n\n## 🔧 Capacités MCP découvertes au démarrage\n");
+        _logger.LogInformation("Starting MCP discovery process...");
 
-        foreach (var mcpServer in _settings.McpServers)
+        try
         {
-            var serverPrefix = string.IsNullOrEmpty(mcpServer.Name) ? "mcp" : mcpServer.Name;
-            discoveryInfo.AppendLine($"\n### Serveur: {mcpServer.Description} ({mcpServer.Url})\n");
-
-            try
-            {
-                // 1. Ping
-                _logger.LogInformation("Pinging MCP server: {Name}", mcpServer.Name);
-                var pingResult = await _toolExecutor.ExecuteAsync($"{serverPrefix}_ping", 
-                    System.Text.Json.JsonSerializer.SerializeToElement(new { }));
-                discoveryInfo.AppendLine($"✅ **Serveur accessible** (ping réussi)");
-
-                // 2. List Tools
-                _logger.LogInformation("Discovering tools from MCP server: {Name}", mcpServer.Name);
-                var toolsResult = await _toolExecutor.ExecuteAsync($"{serverPrefix}_list_tools", 
-                    System.Text.Json.JsonSerializer.SerializeToElement(new { }));
-                discoveryInfo.AppendLine($"\n**Outils disponibles:**");
-                discoveryInfo.AppendLine($"```json\n{System.Text.Json.JsonSerializer.Serialize(toolsResult, new System.Text.Json.JsonSerializerOptions { WriteIndented = true })}\n```");
-
-                // 3. List Resources
-                _logger.LogInformation("Discovering resources from MCP server: {Name}", mcpServer.Name);
-                var resourcesResult = await _toolExecutor.ExecuteAsync($"{serverPrefix}_list_resources", 
-                    System.Text.Json.JsonSerializer.SerializeToElement(new { }));
-                discoveryInfo.AppendLine($"\n**Ressources disponibles:**");
-                discoveryInfo.AppendLine($"```json\n{System.Text.Json.JsonSerializer.Serialize(resourcesResult, new System.Text.Json.JsonSerializerOptions { WriteIndented = true })}\n```");
-
-                // 4. List Prompts
-                _logger.LogInformation("Discovering prompts from MCP server: {Name}", mcpServer.Name);
-                var promptsResult = await _toolExecutor.ExecuteAsync($"{serverPrefix}_list_prompts", 
-                    System.Text.Json.JsonSerializer.SerializeToElement(new { }));
-                discoveryInfo.AppendLine($"\n**Prompts disponibles:**");
-                discoveryInfo.AppendLine($"```json\n{System.Text.Json.JsonSerializer.Serialize(promptsResult, new System.Text.Json.JsonSerializerOptions { WriteIndented = true })}\n```");
-
-                _logger.LogInformation("Successfully discovered MCP capabilities from {Name}", mcpServer.Name);
-            }
-            catch (Exception ex)
-            {
-                _logger.LogWarning(ex, "Failed to discover capabilities from MCP server: {Name}", mcpServer.Name);
-                discoveryInfo.AppendLine($"⚠️ **Erreur lors de la découverte:** {ex.Message}");
-            }
+            // Discover all MCP tools dynamically
+            _discoveredMcpTools = await _mcpDiscovery.DiscoverAllServersAsync(cancellationToken);
+            
+            // Add discovered tools to settings so ToolExecutor can find them
+            _settings.Tools ??= new List<ToolConfig>();
+            _settings.Tools.AddRange(_discoveredMcpTools);
+            
+            // Generate a summary for the system prompt
+            _mcpDiscoveryInfo = await _mcpDiscovery.GenerateCapabilitiesSummaryAsync(cancellationToken);
+            
+            _logger.LogInformation("MCP discovery completed. Discovered {Count} dynamic tools", _discoveredMcpTools.Count);
         }
-
-        _mcpDiscoveryInfo = discoveryInfo.ToString();
-        _logger.LogInformation("MCP discovery completed");
+        catch (Exception ex)
+        {
+            _logger.LogError(ex, "Error during MCP discovery");
+            _mcpDiscoveryInfo = "\n## ⚠️ Erreur lors de la découverte MCP\n\nCertaines capacités MCP peuvent ne pas être disponibles.";
+        }
     }
 
     public async Task<bool> ConnectAsync(CancellationToken cancellationToken = default)
@@ -170,12 +147,28 @@ public class OpenAIRealtimeService : IDisposable
 
     private async Task ConfigureSessionAsync(CancellationToken cancellationToken)
     {
-        // Convert configured tools to API format
-        List<Tool>? tools = null;
+        // Combine configured tools with discovered MCP tools
+        var allToolConfigs = new List<ToolConfig>();
+        
+        // Add manually configured tools (builtin, http, etc.)
         if (_settings.Tools != null && _settings.Tools.Any())
         {
+            allToolConfigs.AddRange(_settings.Tools);
+        }
+        
+        // Add dynamically discovered MCP tools
+        if (_discoveredMcpTools != null && _discoveredMcpTools.Any())
+        {
+            allToolConfigs.AddRange(_discoveredMcpTools);
+            _logger.LogInformation("Adding {Count} dynamically discovered MCP tools", _discoveredMcpTools.Count);
+        }
+
+        // Convert all tools to API format
+        List<Tool>? tools = null;
+        if (allToolConfigs.Any())
+        {
             tools = new List<Tool>();
-            foreach (var t in _settings.Tools)
+            foreach (var t in allToolConfigs)
             {
                 try
                 {
@@ -198,9 +191,7 @@ public class OpenAIRealtimeService : IDisposable
                     {
                         var rawJson = t.Parameters.GetRawText();
                         parameters = System.Text.Json.JsonSerializer.Deserialize<object>(rawJson) ?? new { };
-                        _logger.LogInformation("Added tool {ToolName} with parameters: {Parameters}", 
-                            t.Name, 
-                            rawJson.Length > 100 ? rawJson.Substring(0, 100) + "..." : rawJson);
+                        _logger.LogDebug("Added tool {ToolName} (type: {Type})", t.Name, t.Type);
                     }
                     
                     tools.Add(new Tool
@@ -217,7 +208,7 @@ public class OpenAIRealtimeService : IDisposable
                 }
             }
             
-            _logger.LogInformation("Configured {Count} MCP tools: {Tools}", 
+            _logger.LogInformation("Configured {Count} total tools for OpenAI: {Tools}", 
                 tools.Count, 
                 string.Join(", ", tools.Select(t => t.Name)));
         }

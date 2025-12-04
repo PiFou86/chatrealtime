@@ -138,6 +138,7 @@ builder.Services.AddHttpClient("ToolsHttpClient")
 builder.Services.AddTransient<OpenAIRealtimeService>();
 builder.Services.AddSingleton<RealtimeWebSocketHandler>();
 builder.Services.AddSingleton<IToolExecutor, ToolExecutorService>();
+builder.Services.AddSingleton<McpDiscoveryService>();
 
 var app = builder.Build();
 

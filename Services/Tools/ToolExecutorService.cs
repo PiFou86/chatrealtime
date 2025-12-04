@@ -39,9 +39,130 @@ public class ToolExecutorService : IToolExecutor
         {
             "http" => await ExecuteHttpToolAsync(toolConfig, arguments),
             "mcp" => await ExecuteMcpToolAsync(toolConfig, arguments),
+            "mcp_dynamic" => await ExecuteMcpDynamicToolAsync(toolConfig, arguments),
             "builtin" => await ExecuteBuiltinToolAsync(toolName, arguments),
             _ => throw new ArgumentException($"Unknown tool type: {toolConfig.Type}")
         };
+    }
+
+    private async Task<object> ExecuteMcpDynamicToolAsync(ToolConfig toolConfig, JsonElement arguments)
+    {
+        // For dynamically discovered MCP tools, we need to extract the original tool name
+        // and call the MCP server's tools/call endpoint
+        
+        if (toolConfig.Http == null)
+        {
+            throw new InvalidOperationException($"HTTP configuration missing for dynamic MCP tool: {toolConfig.Name}");
+        }
+
+        var httpConfig = toolConfig.Http;
+        
+        // Extract the original MCP tool name from the wrapper name
+        // Format: {serverPrefix}_{originalToolName}
+        var toolNameParts = toolConfig.Name.Split('_', 2);
+        if (toolNameParts.Length < 2)
+        {
+            throw new InvalidOperationException($"Invalid dynamic MCP tool name format: {toolConfig.Name}");
+        }
+
+        var serverPrefix = toolNameParts[0];
+        var originalToolName = toolNameParts[1];
+
+        _logger.LogInformation("[MCP Dynamic] Calling tool '{OriginalName}' on server '{Prefix}'", 
+            originalToolName, serverPrefix);
+        _logger.LogInformation("[MCP Dynamic] RAW arguments from OpenAI: {Arguments}", arguments.GetRawText());
+
+        // Use named client with Polly policies
+        var httpClient = _httpClientFactory.CreateClient("ToolsHttpClient");
+        
+        // Add custom headers
+        foreach (var header in httpConfig.Headers)
+        {
+            httpClient.DefaultRequestHeaders.TryAddWithoutValidation(header.Key, header.Value);
+        }
+
+        // Prepare the arguments for the MCP tool
+        // Keep arguments as JsonElement to preserve types correctly
+        JsonElement mcpArguments = arguments;
+
+        // Build JSON-RPC request for tools/call
+        // Parse the entire request structure properly to preserve argument types
+        var paramsObj = new Dictionary<string, object>
+        {
+            ["name"] = originalToolName
+        };
+
+        // Only add arguments if there are any (and not empty object)
+        if (arguments.ValueKind != JsonValueKind.Undefined && 
+            arguments.ValueKind != JsonValueKind.Null &&
+            !(arguments.ValueKind == JsonValueKind.Object && arguments.EnumerateObject().Any() == false))
+        {
+            // Parse arguments element by element to preserve types
+            var argsDict = new Dictionary<string, object?>();
+            foreach (var property in arguments.EnumerateObject())
+            {
+                argsDict[property.Name] = ParseJsonElementToObject(property.Value);
+            }
+            paramsObj["arguments"] = argsDict;
+        }
+
+        var mcpRequest = new
+        {
+            jsonrpc = "2.0",
+            id = Random.Shared.Next(1, 1000000),
+            method = "tools/call",
+            @params = paramsObj
+        };
+
+        var jsonOptions = new JsonSerializerOptions
+        {
+            DefaultIgnoreCondition = System.Text.Json.Serialization.JsonIgnoreCondition.WhenWritingNull
+        };
+
+        var requestJson = JsonSerializer.Serialize(mcpRequest, jsonOptions);
+        _logger.LogInformation("[MCP Dynamic] Final JSON-RPC request being sent:");
+        _logger.LogInformation("[MCP Dynamic] {Request}", requestJson);
+
+        var content = new StringContent(
+            requestJson,
+            System.Text.Encoding.UTF8,
+            "application/json");
+
+        var response = await httpClient.PostAsync(httpConfig.Url, content);
+        response.EnsureSuccessStatusCode();
+        
+        var responseBody = await response.Content.ReadAsStringAsync();
+        _logger.LogInformation("[MCP Dynamic] Received response: {Response}", 
+            responseBody.Length > 500 ? responseBody.Substring(0, 500) + "..." : responseBody);
+
+        try
+        {
+            // Parse JSON-RPC response
+            using var doc = JsonDocument.Parse(responseBody);
+            var root = doc.RootElement;
+
+            // Check for error in JSON-RPC response
+            if (root.TryGetProperty("error", out var errorElement))
+            {
+                var errorMessage = errorElement.TryGetProperty("message", out var msg) 
+                    ? msg.GetString() 
+                    : "Unknown MCP error";
+                throw new InvalidOperationException($"MCP Error: {errorMessage}");
+            }
+
+            // Return the result field from JSON-RPC response
+            if (root.TryGetProperty("result", out var resultElement))
+            {
+                return JsonSerializer.Deserialize<object>(resultElement.GetRawText()) ?? new { };
+            }
+
+            return new { response = responseBody };
+        }
+        catch (JsonException)
+        {
+            // Return as string if not valid JSON
+            return new { response = responseBody };
+        }
     }
 
     private async Task<object> ExecuteMcpToolAsync(ToolConfig toolConfig, JsonElement arguments)
@@ -323,6 +444,47 @@ public class ToolExecutorService : IToolExecutor
     public List<string> GetAvailableTools()
     {
         return _settings.Tools?.Select(t => t.Name).ToList() ?? new List<string>();
+    }
+
+    /// <summary>
+    /// Parse JsonElement to appropriate C# type (string, number, bool, object, array)
+    /// This ensures types are preserved correctly when forwarding to MCP server
+    /// </summary>
+    private object? ParseJsonElementToObject(JsonElement element)
+    {
+        return element.ValueKind switch
+        {
+            JsonValueKind.String => element.GetString(),
+            JsonValueKind.Number => element.TryGetInt32(out var intVal) ? intVal : 
+                                   element.TryGetInt64(out var longVal) ? longVal : 
+                                   element.GetDouble(),
+            JsonValueKind.True => true,
+            JsonValueKind.False => false,
+            JsonValueKind.Null => null,
+            JsonValueKind.Object => ParseJsonObject(element),
+            JsonValueKind.Array => ParseJsonArray(element),
+            _ => element.GetRawText()
+        };
+    }
+
+    private Dictionary<string, object?> ParseJsonObject(JsonElement element)
+    {
+        var dict = new Dictionary<string, object?>();
+        foreach (var property in element.EnumerateObject())
+        {
+            dict[property.Name] = ParseJsonElementToObject(property.Value);
+        }
+        return dict;
+    }
+
+    private List<object?> ParseJsonArray(JsonElement element)
+    {
+        var list = new List<object?>();
+        foreach (var item in element.EnumerateArray())
+        {
+            list.Add(ParseJsonElementToObject(item));
+        }
+        return list;
     }
 
     private async Task<object> GetWeatherAsync(JsonElement arguments)
