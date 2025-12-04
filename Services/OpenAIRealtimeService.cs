@@ -550,6 +550,45 @@ public class OpenAIRealtimeService : IDisposable
                 case "response.done":
                     _isResponseActive = false;
                     _logger.LogDebug("Response completed");
+                    
+                    // Log token usage
+                    if (root.TryGetProperty("response", out var response) && 
+                        response.TryGetProperty("usage", out var usage))
+                    {
+                        var totalTokens = usage.TryGetProperty("total_tokens", out var total) ? total.GetInt32() : 0;
+                        var inputTokens = usage.TryGetProperty("input_tokens", out var input) ? input.GetInt32() : 0;
+                        var outputTokens = usage.TryGetProperty("output_tokens", out var output) ? output.GetInt32() : 0;
+                        
+                        _logger.LogInformation("📊 Token usage - Total: {Total} | Input: {Input} | Output: {Output}", 
+                            totalTokens, inputTokens, outputTokens);
+                        
+                        // Log detailed token breakdown if available
+                        if (usage.TryGetProperty("input_token_details", out var inputDetails))
+                        {
+                            var textTokens = inputDetails.TryGetProperty("text_tokens", out var text) ? text.GetInt32() : 0;
+                            var audioTokens = inputDetails.TryGetProperty("audio_tokens", out var audio) ? audio.GetInt32() : 0;
+                            var cachedTokens = inputDetails.TryGetProperty("cached_tokens", out var cached) ? cached.GetInt32() : 0;
+                            
+                            if (textTokens > 0 || audioTokens > 0 || cachedTokens > 0)
+                            {
+                                _logger.LogInformation("  ↳ Input details - Text: {Text} | Audio: {Audio} | Cached: {Cached}", 
+                                    textTokens, audioTokens, cachedTokens);
+                            }
+                        }
+                        
+                        if (usage.TryGetProperty("output_token_details", out var outputDetails))
+                        {
+                            var textTokens = outputDetails.TryGetProperty("text_tokens", out var text) ? text.GetInt32() : 0;
+                            var audioTokens = outputDetails.TryGetProperty("audio_tokens", out var audio) ? audio.GetInt32() : 0;
+                            
+                            if (textTokens > 0 || audioTokens > 0)
+                            {
+                                _logger.LogInformation("  ↳ Output details - Text: {Text} | Audio: {Audio}", 
+                                    textTokens, audioTokens);
+                            }
+                        }
+                    }
+                    
                     await NotifyStatus("Ready");
                     await NotifyResponseComplete();
                     break;

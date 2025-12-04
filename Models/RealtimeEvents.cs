@@ -347,6 +347,48 @@ public class ResponseData
 
     [JsonPropertyName("output")]
     public OutputItem[]? Output { get; set; }
+
+    [JsonPropertyName("usage")]
+    public UsageData? Usage { get; set; }
+}
+
+public class UsageData
+{
+    [JsonPropertyName("total_tokens")]
+    public int? TotalTokens { get; set; }
+
+    [JsonPropertyName("input_tokens")]
+    public int? InputTokens { get; set; }
+
+    [JsonPropertyName("output_tokens")]
+    public int? OutputTokens { get; set; }
+
+    [JsonPropertyName("input_token_details")]
+    public InputTokenDetails? InputTokenDetails { get; set; }
+
+    [JsonPropertyName("output_token_details")]
+    public OutputTokenDetails? OutputTokenDetails { get; set; }
+}
+
+public class InputTokenDetails
+{
+    [JsonPropertyName("cached_tokens")]
+    public int? CachedTokens { get; set; }
+
+    [JsonPropertyName("text_tokens")]
+    public int? TextTokens { get; set; }
+
+    [JsonPropertyName("audio_tokens")]
+    public int? AudioTokens { get; set; }
+}
+
+public class OutputTokenDetails
+{
+    [JsonPropertyName("text_tokens")]
+    public int? TextTokens { get; set; }
+
+    [JsonPropertyName("audio_tokens")]
+    public int? AudioTokens { get; set; }
 }
 
 public class OutputItem
