@@ -31,8 +31,7 @@ dotnet run
 ### 3️⃣ Ouvrir dans le navigateur
 
 Ouvrez **Chrome** ou **Edge** et allez sur :
-- https://localhost:5001 (HTTPS)
-- http://localhost:5000 (HTTP)
+- http://localhost:5166 (HTTP)
 
 ### 4️⃣ Utiliser l'application
 
@@ -45,7 +44,7 @@ Ouvrez **Chrome** ou **Edge** et allez sur :
 
 Si tout fonctionne correctement, vous devriez voir :
 
-1. ✅ Message "Connecté à OpenAI"
+1. ✅ Message "Connecté à GPT-Live"
 2. ✅ Bouton rouge "Arrêter l'écoute"
 3. ✅ Indicateur "En écoute..." en haut
 4. ✅ Vos paroles transcrites apparaissent en bleu
@@ -60,7 +59,7 @@ Si tout fonctionne correctement, vous devriez voir :
 → Autorisez l'accès dans les paramètres du navigateur
 
 ### "Failed to connect to OpenAI"
-→ Vérifiez que votre clé API est valide et que vous avez accès à l'API Realtime
+→ Vérifiez que votre clé API est valide et que votre projet a accès à GPT-Live
 
 ### Pas de son
 → Vérifiez le volume de votre navigateur et que vous utilisez Chrome/Edge
@@ -71,26 +70,29 @@ Si tout fonctionne correctement, vous devriez voir :
 
 Dans `appsettings.json`, changez :
 ```json
-"Voice": "nova"
+"Voice": "marin"
 ```
 
-Voix disponibles : `alloy`, `echo`, `fable`, `onyx`, `nova`, `shimmer`
+Exemples de voix Live : `alloy`, `echo`, `marin`, `cedar`, `coral`, `sage`, `shimmer`.
 
 ### Changer le comportement de l'IA
 
-Modifiez `Instructions` dans `appsettings.json` :
+Modifiez le fichier indiqué par `SystemPromptFile`, ou utilisez `Instructions` si aucun fichier n'est configuré :
 ```json
 "Instructions": "Vous êtes un expert en cuisine. Répondez avec des conseils culinaires."
 ```
 
-### Changer la sensibilité de détection vocale
+### Configurer les outils
 
-Ajustez `Threshold` (0.0 = très sensible, 1.0 = peu sensible) :
+Les règles de délégation sont séparées de la personnalité vocale :
 ```json
-"TurnDetection": {
-  "Threshold": 0.3
-}
+"DelegationModel": "gpt-5.6-luna",
+"DelegationInstructions": "Traite les tâches déléguées. Utilise un outil pour les données externes ou les actions; sinon raisonne directement. Ne confirme jamais une action avant le résultat de l'outil. Retourne un résultat concis et factuel."
 ```
+
+Gardez le prompt Live court et ajoutez-y des sections explicites `Backend tools`, `Delegate to the backend when` et `Do not delegate to the backend when`. Placez les procédures détaillées et la validation des résultats dans `DelegationInstructions`.
+
+WebRTC et GPT-Live gèrent nativement le média, les tours de parole et les interruptions; aucun réglage PCM ou VAD historique n'est requis.
 
 ## 🎯 Prêt !
 

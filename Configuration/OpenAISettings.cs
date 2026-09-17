@@ -5,26 +5,25 @@ namespace chatrealtime.Configuration;
 public class OpenAISettings
 {
     public string ApiKey { get; set; } = string.Empty;
-    public string Model { get; set; } = "gpt-realtime-mini-2025-10-06";
-    public string RealtimeUrl { get; set; } = "wss://api.openai.com/v1/realtime";
+    public string Model { get; set; } = "gpt-live-1";
+    public string LiveSessionsUrl { get; set; } = "https://api.openai.com/v1/live/sessions";
+    public string LiveSidebandUrl { get; set; } = "wss://api.openai.com/v1/live";
+    public string DelegationModel { get; set; } = "gpt-5.6-luna";
+    public string DelegationInstructions { get; set; } =
+        "You are the reasoning and tool backend for a GPT-Live conversation. Handle the delegated task " +
+        "or typed message using the conversation context and the user's latest corrections. Use a tool " +
+        "when the answer depends on external or current data, or when an action must be performed; otherwise " +
+        "reason directly. Treat tool results as authoritative and never claim an action succeeded before a tool " +
+        "confirms it. Ask for missing required details instead of guessing. Return only useful facts, the actual " +
+        "task status, and any next step, concisely. Do not imitate the voice persona or mention internal delegation; " +
+        "GPT-Live handles personality and speech.";
     public string Voice { get; set; } = "alloy";
-    public string TranscriptionModel { get; set; } = "gpt-4o-transcribe";
     public string SystemPromptFile { get; set; } = "Prompts/Marvin.md";
-    public double Temperature { get; set; } = 0.8;
     public int MaxResponseOutputTokens { get; set; } = 4096;
     public string Instructions { get; set; } = string.Empty;
-    public TurnDetectionSettings TurnDetection { get; set; } = new();
     public List<ToolConfig> Tools { get; set; } = new();
     public List<McpServerConfig> McpServers { get; set; } = new();
     public ResilienceSettings Resilience { get; set; } = new();
-}
-
-public class TurnDetectionSettings
-{
-    public string Type { get; set; } = "server_vad";
-    public double Threshold { get; set; } = 0.5;
-    public int PrefixPaddingMs { get; set; } = 300;
-    public int SilenceDurationMs { get; set; } = 500;
 }
 
 public class ToolConfig

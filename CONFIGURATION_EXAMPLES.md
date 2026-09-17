@@ -218,7 +218,10 @@ Si vous avez déjà un `appsettings.json` sans résilience :
 {
   "OpenAI": {
     "ApiKey": "votre-clé",
-    "Model": "gpt-realtime-mini-2025-10-06",
+    "Model": "gpt-live-1",
+    "LiveSessionsUrl": "https://api.openai.com/v1/live/sessions",
+    "LiveSidebandUrl": "wss://api.openai.com/v1/live",
+    "DelegationModel": "gpt-5.6-luna",
     // ... vos paramètres existants ...
     
     // ⬇️ Ajoutez ceci

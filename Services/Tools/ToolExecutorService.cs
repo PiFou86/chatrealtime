@@ -524,6 +524,10 @@ public class ToolExecutorService : IToolExecutor
         var timezone = arguments.TryGetProperty("timezone", out var tz) 
             ? tz.GetString() 
             : throw new ArgumentException("Missing required parameter: timezone");
+        if (string.IsNullOrWhiteSpace(timezone))
+        {
+            throw new ArgumentException("Missing required parameter: timezone");
+        }
 
         _logger.LogInformation("Getting time for timezone: {Timezone}", timezone);
 

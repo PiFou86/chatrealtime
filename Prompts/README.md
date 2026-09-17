@@ -26,9 +26,11 @@ Personnalité de Marvin, le robot paranoïde android du Guide du voyageur galact
 ## Créer votre propre prompt
 
 1. Créez un nouveau fichier `.md` dans ce dossier
-2. Décrivez la personnalité, le style et les consignes pour l'assistant
+2. Décrivez brièvement la personnalité, le style vocal et les conditions de délégation
 3. Mettez à jour `appsettings.json` pour pointer vers votre nouveau fichier
 4. Redémarrez l'application
+
+Gardez les procédures métier détaillées et les instructions d'outils dans `DelegationInstructions`, pas dans le prompt Live.
 
 ## Exemple de structure
 
@@ -37,35 +39,40 @@ Personnalité de Marvin, le robot paranoïde android du Guide du voyageur galact
 
 Description brève du personnage.
 
-## Caractéristiques
+## Personnalité et voix
 
-- Liste des traits de personnalité
-- Comportements spécifiques
+- Rôle, ton, langue et rythme
+- Gestion des interruptions
 
-## Style de réponse
+## Politique de délégation
 
-- Ton à utiliser
-- Façon de s'exprimer
+- Backend tools: capacités réellement disponibles
+- Delegate to the backend when: conditions concrètes
+- Do not delegate to the backend when: réponses que Live peut donner directement
 
-## Exemples de phrases typiques
-
-- "Exemple 1"
-- "Exemple 2"
-
-## Consignes importantes
-
-- Règles à respecter
-- Limitations ou recommandations
+Ne devine pas un résultat backend et attends sa confirmation avant d'annoncer la réussite d'une action.
 ```
 
-## Voix disponibles
+## Configurations vocales conseillées
 
-Vous pouvez changer la voix dans `appsettings.json`. Voix disponibles :
-- `alloy` - Neutre et équilibrée
-- `echo` - Masculine et claire
-- `fable` - Expressive et britannique
-- `onyx` - Profonde et masculine
-- `nova` - Douce et agréable
-- `shimmer` - Énergique et féminine
+La voix est sélectionnée au démarrage d'une session avec `Voice`. Les choix ci-dessous sont des points de départ à écouter et à ajuster : une voix ne garantit pas à elle seule un accent régional. Les prompts imposent donc aussi la langue, la prononciation, le rythme et le jeu émotionnel.
 
-Pour Marvin, nous recommandons `echo` pour une voix plus robotique et masculine.
+| Personnage | `SystemPromptFile` | Voix conseillée | Alternative |
+|---|---|---|---|
+| Chucky | `Prompts/Chucky.md` | `ash` | `verse` |
+| Deadpool | `Prompts/Deadpool.md` | `verse` | `echo` |
+| GLaDOS | `Prompts/GLaDOS.md` | `shimmer` | `sage` |
+| Marvin | `Prompts/Marvin.md` | `onyx` | `echo` |
+| Onzième Docteur | `Prompts/OnziemeDocteurWho.md` | `fable` | `ballad` |
+| Wednesday Addams | `Prompts/WednesdayAddams.md` | `sage` | `coral` |
+| Yoda | `Prompts/Yoda.md` | `cedar` | `onyx` |
+| Young Sheldon | `Prompts/YoungSheldon.md` | `alloy` | `ash` |
+
+Exemple pour Yoda :
+
+```json
+"SystemPromptFile": "Prompts/Yoda.md",
+"Voice": "cedar"
+```
+
+Redémarrez la session vocale après avoir changé le personnage ou la voix. Les voix intégrées utilisables peuvent évoluer selon le modèle et l'accès du projet; consultez la référence Live si une voix est refusée par l'API.

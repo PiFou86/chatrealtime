@@ -11,4 +11,11 @@
     <PackageReference Include="Microsoft.Extensions.Http.Polly" Version="9.0.0" />
   </ItemGroup>
 
+  <ItemGroup>
+    <InternalsVisibleTo Include="chatrealtime.Tests" />
+    <Compile Remove="chatrealtime.Tests/**/*.cs" />
+    <Content Remove="chatrealtime.Tests/**/*" />
+    <None Remove="chatrealtime.Tests/**/*" />
+  </ItemGroup>
+
 </Project>

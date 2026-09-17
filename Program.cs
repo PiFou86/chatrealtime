@@ -14,12 +14,10 @@ var openAISettings = builder.Configuration.GetSection("OpenAI").Get<OpenAISettin
 // Generate MCP tools automatically from McpServers configuration
 if (openAISettings.McpServers != null && openAISettings.McpServers.Any())
 {
-    var logger = builder.Services.BuildServiceProvider().GetRequiredService<ILogger<Program>>();
     openAISettings.Tools ??= new List<ToolConfig>();
     
     foreach (var mcpServer in openAISettings.McpServers)
     {
-        logger.LogInformation("Generating MCP tools for server: {Name} at {Url}", mcpServer.Name, mcpServer.Url);
         openAISettings.Tools.AddRange(GenerateMcpTools(mcpServer));
     }
 }
@@ -135,10 +133,14 @@ builder.Services.AddHttpClient("ToolsHttpClient")
         }
     });
 
-builder.Services.AddTransient<OpenAIRealtimeService>();
-builder.Services.AddSingleton<RealtimeWebSocketHandler>();
 builder.Services.AddSingleton<IToolExecutor, ToolExecutorService>();
 builder.Services.AddSingleton<McpDiscoveryService>();
+builder.Services.AddSingleton<LiveConfigurationFactory>();
+builder.Services.AddSingleton<ILiveConfigurationFactory>(services => services.GetRequiredService<LiveConfigurationFactory>());
+builder.Services.AddHttpClient<IOpenAILiveClient, OpenAILiveClient>();
+builder.Services.AddSingleton<LiveSessionManager>();
+builder.Services.AddSingleton<ILiveSessionManager>(services => services.GetRequiredService<LiveSessionManager>());
+builder.Services.AddHostedService(services => services.GetRequiredService<LiveSessionManager>());
 
 var app = builder.Build();
 
@@ -148,33 +150,12 @@ if (app.Environment.IsDevelopment())
     app.MapOpenApi();
 }
 
-// Enable WebSocket support
-app.UseWebSockets(new WebSocketOptions
-{
-    KeepAliveInterval = TimeSpan.FromSeconds(120)
-});
-
 app.UseHttpsRedirection();
 app.UseDefaultFiles();
 app.UseStaticFiles();
 
 // Map API controllers
 app.MapControllers();
-
-// WebSocket endpoint for realtime communication
-app.Map("/ws/realtime", async context =>
-{
-    if (context.WebSockets.IsWebSocketRequest)
-    {
-        var handler = context.RequestServices.GetRequiredService<RealtimeWebSocketHandler>();
-        using var webSocket = await context.WebSockets.AcceptWebSocketAsync();
-        await handler.HandleWebSocketAsync(context, webSocket);
-    }
-    else
-    {
-        context.Response.StatusCode = StatusCodes.Status400BadRequest;
-    }
-});
 
 app.Run();
 
@@ -354,3 +335,5 @@ static List<ToolConfig> GenerateMcpTools(McpServerConfig mcpServer)
 
     return tools;
 }
+
+public partial class Program;
